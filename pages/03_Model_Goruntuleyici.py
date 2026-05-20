@@ -152,7 +152,7 @@ with ctrl_b:
         st.warning("Bu violated modelin baseline'ı listede yok; sadece violated görüntüleniyor.")
     elif entry["kind"] == "violated":
         st.success(f"Baseline ile karşılaştırılıyor: `{partner_entry['id'][:8]}`")
-    elif entry["kind"] == "baseline":
+    elif entry["kind"] in ("baseline", "baseline_uploaded"):
         # Allow opening any one of its violated children alongside.
         from app.state import violated_children
         kids = violated_children(root, entry["id"])
@@ -176,7 +176,7 @@ baseline_entry: dict | None = None
 if entry["kind"] == "violated":
     violated_sample, violated_entry = sample, entry
     baseline_sample, baseline_entry = partner_sample, partner_entry
-elif entry["kind"] == "baseline":
+elif entry["kind"] in ("baseline", "baseline_uploaded"):
     baseline_sample, baseline_entry = sample, entry
     violated_sample, violated_entry = partner_sample, partner_entry
 else:  # imported — treat as standalone

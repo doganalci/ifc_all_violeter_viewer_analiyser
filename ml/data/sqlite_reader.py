@@ -98,6 +98,16 @@ class DatasetReader:
     def list_baselines(self) -> list[IFCEntry]:
         return self.list_models(kind="baseline")
 
+    def list_baseline_uploaded(self) -> list[IFCEntry]:
+        return self.list_models(kind="baseline_uploaded")
+
+    def list_all_baselines(self) -> list[IFCEntry]:
+        """LLM-üretilen + kullanıcı-yüklenen baseline'lar (GAT eğitimi için).
+
+        ``include_baselines=True`` modunda her iki tür de eğitime girer.
+        """
+        return self.list_baselines() + self.list_baseline_uploaded()
+
     def get_model(self, ifc_id: str) -> IFCEntry | None:
         row = self._conn.execute(
             "SELECT * FROM ifc_models WHERE id=?", (ifc_id,)

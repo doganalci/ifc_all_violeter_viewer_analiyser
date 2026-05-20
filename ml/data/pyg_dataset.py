@@ -101,7 +101,10 @@ class IFCViolationDataset(InMemoryDataset):
 
     @property
     def processed_file_names(self) -> list[str]:
-        suffix = "_with_base" if self._include_baselines else ""
+        # `_with_all_base` suffix → eski `_with_base.pt` cache'i otomatik
+        # geçersiz kılınır. include_baselines=True artık LLM + yüklenen
+        # baseline'ların ikisini de kapsadığı için cache name'i de değişir.
+        suffix = "_with_all_base" if self._include_baselines else ""
         return [f"ifc_violation{suffix}.pt"]
 
     def download(self) -> None:  # noqa: D401
@@ -116,7 +119,8 @@ class IFCViolationDataset(InMemoryDataset):
                 )
                 data_list.append(sample_to_data(sample))
             if self._include_baselines:
-                for entry in reader.list_baselines():
+                # list_all_baselines = LLM-üretilen + kullanıcı-yüklenen
+                for entry in reader.list_all_baselines():
                     if not (entry.graph_path and entry.graph_path.exists()):
                         continue
                     sample = load_sample(entry.graph_path, None, ifc_id=entry.id)

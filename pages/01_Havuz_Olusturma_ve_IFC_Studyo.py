@@ -596,8 +596,9 @@ with tab_tok:
 
 
 with top_ifc:
-    ifc_t1, ifc_t1b, ifc_t2, ifc_tpipe, ifc_t3 = st.tabs(
+    ifc_t1, ifc_t1b, ifc_t1c, ifc_t2, ifc_tpipe, ifc_t3 = st.tabs(
         ["Baseline IFC üret", "Gerçek IFC içe aktar",
+         "📦 Baseline klasörü yükle",
          "İhlal enjekte et", "Otomatik Dataset",
          "IFC'leri görüntüle"]
     )
@@ -749,6 +750,72 @@ with top_ifc:
                 "created_at": m["created_at"], "file": m["file_path"],
             } for m in imported]), use_container_width=True)
 
+    # -------- Baseline klasörü yükle --------
+    with ifc_t1c:
+        st.subheader("📦 Baseline IFC klasörünü yükle")
+        st.caption(
+            "Yerel klasördeki tüm `.ifc` dosyaları **`baseline_uploaded`** "
+            "olarak `data/ifc_models/baseline_uploaded/` altına kopyalanır; "
+            "ifcopenshell ile parse edilir, graph (NetworkX) üretilir. "
+            "Sonrasında bu IFC'ler: (1) ihlal enjeksiyonunda kaynak olarak "
+            "(baseline gibi), (2) GAT eğitiminde 'include_baselines=True' "
+            "iken otomatik olarak baseline olarak kullanılır. LLM üretilen "
+            "`baseline`'lardan ayrı listelenir."
+        )
+        bu_dir = st.text_input(
+            "Klasör yolu", placeholder="/Users/.../IFCs", key="bu_dir",
+        )
+        bu_recursive = st.checkbox(
+            "Alt klasörleri de tara", value=True, key="bu_recursive",
+        )
+        if st.button(
+            "Klasörü tara ve baseline olarak içe aktar",
+            disabled=not bu_dir.strip(), key="bu_scan", type="primary",
+        ):
+            base = Path(bu_dir.strip()).expanduser()
+            if not base.exists():
+                st.error(f"Klasör bulunamadı: {base}")
+            elif not base.is_dir():
+                st.error(f"Bu bir klasör değil: {base}")
+            else:
+                pattern = "**/*.ifc" if bu_recursive else "*.ifc"
+                files = sorted(base.glob(pattern))
+                if not files:
+                    st.warning("Klasörde `.ifc` dosyası bulunamadı.")
+                else:
+                    rows = []
+                    with st.spinner(f"{len(files)} dosya içe aktarılıyor..."):
+                        for fp in files:
+                            try:
+                                r = ifc_gen.import_real_ifc(
+                                    src_path=fp, name=fp.name,
+                                    kind="baseline_uploaded",
+                                )
+                                rows.append({
+                                    "name": fp.name,
+                                    "id": r["ifc_model_id"][:8],
+                                    "status": r["status"],
+                                    "graph": bool(r["graph_path"]),
+                                    "error": r["error"],
+                                })
+                            except Exception as e:
+                                rows.append({
+                                    "name": fp.name, "id": "-",
+                                    "status": "error", "graph": False,
+                                    "error": str(e),
+                                })
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+        st.divider()
+        uploaded = storage.list_ifc_models("baseline_uploaded")
+        st.caption(f"Yüklenen baseline: {len(uploaded)}")
+        if uploaded:
+            st.dataframe(pd.DataFrame([{
+                "id": m["id"][:8], "name": m["name"], "status": m["status"],
+                "graph": bool(m.get("graph_path")),
+                "created_at": m["created_at"], "file": m["file_path"],
+            } for m in uploaded]), use_container_width=True)
+
     # -------- Enjeksiyon --------
     with ifc_t2:
         st.subheader("Baseline'a havuzdan ihlal enjekte et")
@@ -760,14 +827,20 @@ with top_ifc:
         )
 
         sources = [m for m in storage.list_ifc_models()
-                   if m["kind"] in ("baseline", "imported") and m["status"] == "ok"]
+                   if m["kind"] in ("baseline", "baseline_uploaded", "imported")
+                   and m["status"] == "ok"]
         if not sources:
-            st.warning("Önce geçerli (status=ok) bir baseline veya imported IFC olmalı.")
+            st.warning(
+                "Önce geçerli (status=ok) bir baseline, baseline_uploaded "
+                "veya imported IFC olmalı."
+            )
         bo = {m["id"]: f"[{m['kind']}] {m['name']} · {m['id'][:8]} · {m['created_at']}"
               for m in sources}
-        sel_base = st.selectbox("Kaynak IFC (baseline / imported)",
-                                list(bo.keys()) or [""],
-                                format_func=lambda k: bo.get(k, "-"))
+        sel_base = st.selectbox(
+            "Kaynak IFC (baseline / baseline_uploaded / imported)",
+            list(bo.keys()) or [""],
+            format_func=lambda k: bo.get(k, "-"),
+        )
 
         saved_pools = [r for r in storage.list_runs() if r["status"] == "saved"]
         po = {r["id"]: f"{r['name']} · {METHOD_LABELS.get(r['method'], r['method'])}"
@@ -1011,12 +1084,13 @@ with top_ifc:
 
             kind_filter = st.radio(
                 "Kaynak tür filtresi",
-                ["baseline", "imported", "violated", "tümü"],
-                horizontal=True, index=3,
+                ["baseline", "baseline_uploaded", "imported", "violated", "tümü"],
+                horizontal=True, index=4,
                 key="pipe_kind_filter",
                 help=(
                     "baseline: pipeline ile üretilenler  ·  "
-                    "imported: dışarıdan içe aktarılanlar  ·  "
+                    "baseline_uploaded: klasörden yüklenenler  ·  "
+                    "imported: dışarıdan ad-hoc içe aktarılanlar  ·  "
                     "violated: önceden ihlal enjekte edilmiş "
                     "(üst üste ihlal koymak için)  ·  "
                     "tümü: hepsi"
@@ -1024,9 +1098,10 @@ with top_ifc:
             )
             kinds = (
                 {"baseline"} if kind_filter == "baseline" else
+                {"baseline_uploaded"} if kind_filter == "baseline_uploaded" else
                 {"imported"} if kind_filter == "imported" else
                 {"violated"} if kind_filter == "violated" else
-                {"baseline", "imported", "violated"}
+                {"baseline", "baseline_uploaded", "imported", "violated"}
             )
             existing = [m for m in storage.list_ifc_models()
                         if m["kind"] in kinds and m["status"] == "ok"]
@@ -1150,8 +1225,11 @@ with top_ifc:
     # -------- Görüntüleme --------
     with ifc_t3:
         st.subheader("Üretilmiş IFC'ler")
-        kind = st.radio("Tür", ["baseline", "violated", "imported"],
-                         horizontal=True)
+        kind = st.radio(
+            "Tür",
+            ["baseline", "baseline_uploaded", "violated", "imported"],
+            horizontal=True,
+        )
         models = storage.list_ifc_models(kind)
         if not models:
             st.caption("Bu türde IFC henüz yok.")

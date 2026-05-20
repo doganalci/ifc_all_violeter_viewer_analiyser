@@ -99,7 +99,7 @@ def vectorstore_dir() -> Path:
 
 def ifc_models_dir() -> Path:
     p = _sub("ifc_models")
-    for kind in ("baseline", "violated", "imports"):
+    for kind in ("baseline", "baseline_uploaded", "violated", "imports"):
         (p / kind).mkdir(parents=True, exist_ok=True)
     return p
 

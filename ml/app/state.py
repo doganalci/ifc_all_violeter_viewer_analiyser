@@ -223,9 +223,10 @@ def folder_browser(start: str | Path | None = None,
 # ----- Sidebar UI ------------------------------------------------------------
 
 _KIND_LABEL = {
-    "baseline": "📐 Baseline (üretilen)",
+    "baseline": "📐 Baseline (LLM üretti)",
+    "baseline_uploaded": "📦 Baseline (yüklenen)",
     "violated": "⚠️ Violated (ihlal enjekte)",
-    "imported": "📥 Imported (dışarıdan)",
+    "imported": "📥 Imported (dışarıdan, ad-hoc)",
 }
 
 
@@ -273,7 +274,10 @@ def sidebar_config() -> dict | None:
     # Group by kind so violated + imported always show as options even
     # when most entries are baselines.
     kinds_present = sorted({e["kind"] for e in entries})
-    kind_options = [k for k in ("baseline", "violated", "imported") if k in kinds_present]
+    kind_options = [
+        k for k in ("baseline", "baseline_uploaded", "violated", "imported")
+        if k in kinds_present
+    ]
     default_kind = "violated" if "violated" in kind_options else kind_options[0]
     kind = st.sidebar.selectbox(
         "Tür",

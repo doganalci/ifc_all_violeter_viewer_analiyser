@@ -59,9 +59,10 @@ def _status_table() -> list[tuple[str, str, bool]]:
 
 def _ifc_counts() -> dict[str, int]:
     base = paths.ifc_models_dir()
+    # folder adları (column adı != folder adı bazı türler için)
     return {
         kind: sum(1 for _ in (base / kind).glob("*.ifc"))
-        for kind in ("baseline", "violated", "imports")
+        for kind in ("baseline", "baseline_uploaded", "violated", "imports")
     }
 
 
@@ -94,10 +95,11 @@ with col_right:
     st.subheader("Dataset özeti")
     if paths.db_path().exists():
         counts = _ifc_counts()
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Baseline", counts["baseline"])
-        c2.metric("Violated", counts["violated"])
-        c3.metric("Imports", counts["imports"])
+        c1, c2 = st.columns(2)
+        c1.metric("📐 Baseline (LLM)", counts["baseline"])
+        c2.metric("📦 Baseline (yüklenen)", counts["baseline_uploaded"])
+        c1.metric("⚠️ Violated", counts["violated"])
+        c2.metric("📥 Imports", counts["imports"])
     else:
         st.info("Henüz veri yok. Sol menüden **Havuz Oluşturma & IFC Stüdyo** "
                 "sayfasına gidip ilk havuzunu üret.")
