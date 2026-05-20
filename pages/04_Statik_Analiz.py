@@ -102,9 +102,10 @@ if go:
         "en erişilebilir": accessible_path(g, src, dst),
         "en geniş": widest_path(g, src, dst),
     }
+    # path_src/path_dst Streamlit widget'larının key'leri — onlara
+    # elle yazmak StreamlitAPIException tetikler; widget kendi
+    # session_state'ini zaten yönetiyor.
     st.session_state["path_results"] = results
-    st.session_state["path_src"] = src
-    st.session_state["path_dst"] = dst
 
 results = st.session_state["path_results"]
 

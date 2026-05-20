@@ -116,6 +116,7 @@ st.markdown(
 | 5 | **GAT Eğitim** | Hetero-GAT eğit (uygulama içi) |
 | 6 | **GAT Tespiti** | Eğitilmiş checkpoint'le tek-model tahmini + label diff |
 | 7 | **GAT Test** | Birden çok IFC üzerinde toplu test |
+| 8 | **Dış IFC Görüntüle** | Dataset dışındaki tek IFC veya klasördeki tüm IFC'leri hızlıca 3D + graph olarak gör (kalıcı kayıt yok) |
 """
 )
 

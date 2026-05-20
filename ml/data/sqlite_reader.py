@@ -87,7 +87,13 @@ class DatasetReader:
         return [self._row_to_entry(r) for r in self._conn.execute(sql, args)]
 
     def list_violated(self) -> list[IFCEntry]:
-        return self.list_models(kind="violated")
+        # status='ok' (tüm ihlaller uygulandı) + 'partial' (bazıları
+        # atlandı ama IFC+graph+labels yine de geçerli) — ikisi de
+        # eğitim için kullanılabilir.
+        out: list[IFCEntry] = []
+        for status in ("ok", "partial"):
+            out.extend(self.list_models(kind="violated", status=status))
+        return out
 
     def list_baselines(self) -> list[IFCEntry]:
         return self.list_models(kind="baseline")
