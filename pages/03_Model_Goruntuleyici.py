@@ -84,6 +84,16 @@ def _render_ifc(meshes, *, violation_guids, decoy_guids,
     if meshes is None:
         st.info("IFC dosyası bulunamadı ya da ifcopenshell yok.")
         return
+    # Seçili düğüm var ama mesh yoksa kullanıcıyı bilgilendir
+    # (IfcSpace, IfcBuildingStorey gibi container'lar geometri üretmez).
+    if selected_guid is not None:
+        mesh_guids = {m.guid for m in meshes}
+        if selected_guid not in mesh_guids:
+            st.caption(
+                f"⚠️ Seçili düğüm `{selected_guid[:8]}…` için 3D geometri yok "
+                "(muhtemelen IfcSite / IfcBuildingStorey / IfcSpace gibi "
+                "container). Vurgulanamaz."
+            )
     fig = build_figure(
         meshes,
         violation_guids=violation_guids,
@@ -202,6 +212,31 @@ if baseline_sample:
 if current not in all_guids:
     current = None
 
+# Görünür seçim status bar — kullanıcının tıklamasının yakalandığını
+# doğrulaması ve istediğinde seçimi temizleyebilmesi için.
+sel_cols = st.columns([4, 1])
+with sel_cols[0]:
+    if current:
+        primary = (violated_sample or baseline_sample)
+        ifc_type = "?"
+        if primary and current in primary.graph.nodes:
+            ifc_type = primary.graph.nodes[current].get("ifc_type", "?")
+        elif baseline_sample and current in baseline_sample.graph.nodes:
+            ifc_type = baseline_sample.graph.nodes[current].get("ifc_type", "?")
+        st.info(
+            f"🔵 Seçili düğüm: **{ifc_type}** · `{current}` "
+            f"— 3D'de mavi (`{ '#1aa3ff' }`) olarak vurgulanır."
+        )
+    else:
+        st.caption(
+            "💡 Bir grafikten düğüm tıklayınca burada görünür ve 3D modelde "
+            "mavi renkle vurgulanır."
+        )
+with sel_cols[1]:
+    if current and st.button("✕ Seçimi temizle", use_container_width=True):
+        set_selected_node(None)
+        st.rerun()
+
 # Build panel descriptors.
 PANEL_HEIGHT_GRID = 460
 PANEL_HEIGHT_FULL = 760
@@ -228,14 +263,38 @@ def panel_violated_ifc(height: int):
                 height=height, key_suffix="violated_ifc")
 
 
+def _click_to_guid(clicked) -> str | None:
+    """Agraph dönüş değerini GUID stringine normalize et.
+
+    streamlit-agraph versiyona göre str / dict / list dönebilir; hepsini
+    güvenli şekilde stringe indir. Boş string veya None ise yok say.
+    """
+    if not clicked:
+        return None
+    if isinstance(clicked, str):
+        return clicked
+    if isinstance(clicked, dict):
+        # Bazı versiyonlar {"node": "<guid>"} veya {"id": "..."} döner
+        for k in ("node", "id", "selectedNode", "nodeId"):
+            v = clicked.get(k)
+            if isinstance(v, str) and v:
+                return v
+        return None
+    if isinstance(clicked, (list, tuple)) and clicked:
+        first = clicked[0]
+        return first if isinstance(first, str) else None
+    return None
+
+
 def panel_baseline_graph(height: int):
     clicked = _render_graph(baseline_sample,
                             violation_guids=set(),
                             decoy_guids=set(),
                             selected_guid=current,
                             height=height, key_suffix="baseline_graph")
-    if clicked and clicked != current:
-        set_selected_node(clicked)
+    guid = _click_to_guid(clicked)
+    if guid and guid != current:
+        set_selected_node(guid)
         st.rerun()
 
 
@@ -245,8 +304,9 @@ def panel_violated_graph(height: int):
                             decoy_guids=dec_show,
                             selected_guid=current,
                             height=height, key_suffix="violated_graph")
-    if clicked and clicked != current:
-        set_selected_node(clicked)
+    guid = _click_to_guid(clicked)
+    if guid and guid != current:
+        set_selected_node(guid)
         st.rerun()
 
 
