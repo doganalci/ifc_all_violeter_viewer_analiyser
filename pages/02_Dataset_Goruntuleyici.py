@@ -18,7 +18,7 @@ from viewer.config import (
 )
 
 st.set_page_config(
-    page_title="Erişilebilirlik Dataset Viewer",
+    page_title="Dataset Görüntüleyici",
     page_icon="🔎",
     layout="wide",
 )

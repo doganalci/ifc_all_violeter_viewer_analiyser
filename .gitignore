@@ -1,4 +1,31 @@
-# Python
+# ---- Sırlar -----------------------------------------------------
+secrets.txt
+.env
+.env.local
+
+# ---- Veri (kalıcı, parent dir'de yer alır — repo içinde dursa bile uçmasın)
+# Sadece repo kökündeki `data/` ignore — `ml/data/` kod modülü etkilenmez.
+/data/
+docs/
+vectorstore/
+exports/
+ifc_models/
+runs/
+ml_runs/
+checkpoints/
+predictions/
+mlruns/
+wandb/
+logs/
+violation_pool.sqlite
+violation_pool.sqlite-*
+*.pt
+*.pth
+*.ckpt
+*.sqlite
+*.sqlite-journal
+
+# ---- Python -----------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
@@ -7,14 +34,12 @@ __pycache__/
 build/
 dist/
 
-# Ortamlar
+# ---- Sanallaştırma ----------------------------------------------
 .venv/
 venv/
 env/
-.env
-.env.local
 
-# IDE / OS
+# ---- IDE / OS ---------------------------------------------------
 .vscode/
 .idea/
 *.swp
@@ -22,26 +47,5 @@ env/
 Thumbs.db
 .ipynb_checkpoints/
 
-# Streamlit
+# ---- Streamlit --------------------------------------------------
 .streamlit/secrets.toml
-
-# Üretilen veri — IFC_DATA_HOME'da kalmalı, koda sızmamalı
-data/
-docs/
-vectorstore/
-exports/
-ifc_models/
-ml_runs/
-runs/
-checkpoints/
-predictions/
-mlruns/
-wandb/
-*.pt
-*.pth
-*.ckpt
-*.sqlite
-*.sqlite-journal
-
-# Test artefaktları
-data/cache/

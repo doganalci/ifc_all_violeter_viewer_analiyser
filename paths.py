@@ -1,18 +1,26 @@
-"""Merkezi veri klasörü çözümleme.
+"""Merkezi yol & secrets çözümleme.
 
-Tüm modüller (codex1 çekirdeği, viewer, ml) verilerini tek bir
-`IFC_DATA_HOME` altında tutar. Bu modül o yolu bulur, gerekli alt
-klasörleri oluşturur ve `.env` dosyasını yükler.
+Yerleşim:
 
-Çözümleme sırası (ilk bulunan kazanır):
-  1. `IFC_DATA_HOME` ortam değişkeni
-  2. Kardeş klasör: program reposunun bir üstünde `ifc_desktop_doc_dataset/`
-  3. `~/Desktop/doga_full_ifc_prog/ifc_desktop_doc_dataset/`
-  4. Hata → kullanıcıya kurulum talimatı
+    <parent>/
+    ├── ifc_all_violeter_viewer_analiyser/   ← bu repo (silinip clone'lanır)
+    ├── secrets.txt                          ← API key (kalıcı, repo dışı)
+    └── data/                                ← veri (kalıcı, repo dışı)
+        ├── violation_pool.sqlite
+        ├── ifc_models/{baseline,violated,imports}/
+        ├── exports/  docs/  vectorstore/  runs/  logs/
 
-CLI argümanı (örn. `--data-home`) script'lerden ayrı geçilir; o değer
-bu modül import edilmeden önce `os.environ["IFC_DATA_HOME"]`'a
-yazılırsa otomatik etki eder.
+Repo'yu `git pull` ettiğinde veya komple silip yeniden clone'ladığında
+`data/` ve `secrets.txt` parent klasörde durduğu için etkilenmez.
+
+Çözümleme (ilk uyan kazanır):
+  • Veri:     `IFC_DATA_HOME` env → `<repo>/../data/` (varsayılan, otomatik
+              oluşturulur)
+  • Secrets:  `IFC_SECRETS_FILE` env → `<repo>/../secrets.txt`
+              (yoksa repo içindeki `secrets.txt` da geriye uyum için okunur)
+
+Cross-platform: tüm yollar `pathlib.Path` üzerinden çözülür, macOS / Linux /
+Windows fark etmez. Sabit kodlanmış bir mutlak yol yoktur.
 """
 from __future__ import annotations
 
@@ -22,63 +30,57 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-_PROGRAM_ROOT = Path(__file__).resolve().parent
-_SIBLING_NAME = "ifc_desktop_doc_dataset"
-_FALLBACK = Path.home() / "Desktop" / "doga_full_ifc_prog" / _SIBLING_NAME
+
+PROGRAM_ROOT: Path = Path(__file__).resolve().parent
+PARENT_ROOT: Path = PROGRAM_ROOT.parent
 
 
-def _from_env() -> Optional[Path]:
+# ----------------------------- secrets -----------------------------
+
+def _secrets_candidates() -> list[Path]:
+    """Aranan sırayla secrets.txt aday yolları."""
+    out: list[Path] = []
+    env_override = os.getenv("IFC_SECRETS_FILE", "").strip()
+    if env_override:
+        out.append(Path(env_override).expanduser().resolve())
+    out.append(PARENT_ROOT / "secrets.txt")     # asıl yer
+    out.append(PROGRAM_ROOT / "secrets.txt")    # repo içi (yedek / dev)
+    out.append(PROGRAM_ROOT / ".env")           # geriye dönük uyum
+    out.append(PARENT_ROOT / ".env")
+    return out
+
+
+def secrets_file() -> Optional[Path]:
+    """Mevcut secrets dosyasının yolu; yoksa None."""
+    for c in _secrets_candidates():
+        if c.exists() and c.is_file():
+            return c
+    return None
+
+
+def load_secrets() -> Optional[Path]:
+    """Bulunan ilk secrets dosyasını ortam değişkenlerine yükle. Yolu döndürür."""
+    p = secrets_file()
+    if p is not None:
+        load_dotenv(p, override=False)
+    return p
+
+
+# ----------------------------- data home -----------------------------
+
+def _resolve_data_home() -> Path:
     raw = os.getenv("IFC_DATA_HOME", "").strip()
-    if not raw:
-        return None
-    return Path(raw).expanduser().resolve()
-
-
-def _from_sibling() -> Optional[Path]:
-    cand = _PROGRAM_ROOT.parent / _SIBLING_NAME
-    return cand if cand.exists() else None
-
-
-def _from_desktop_fallback() -> Optional[Path]:
-    return _FALLBACK if _FALLBACK.exists() else None
-
-
-def resolve_data_home(create: bool = True) -> Path:
-    """`IFC_DATA_HOME` olarak kullanılacak yolu döndür."""
-    home = _from_env() or _from_sibling() or _from_desktop_fallback()
-    if home is None:
-        raise RuntimeError(
-            "IFC veri klasörü bulunamadı. Şu seçeneklerden birini yap:\n"
-            "  1) Veri reposunu komşu klasör olarak klonla:\n"
-            f"       git clone https://github.com/doganalci/{_SIBLING_NAME}.git "
-            f"{_PROGRAM_ROOT.parent}/{_SIBLING_NAME}\n"
-            "  2) Veya `IFC_DATA_HOME` env var ile yolu göster:\n"
-            "       export IFC_DATA_HOME=/tam/yol/ifc_desktop_doc_dataset\n"
-            "  3) Veya script'i `--data-home /tam/yol` ile çalıştır."
-        )
-    if create:
-        home.mkdir(parents=True, exist_ok=True)
-    # Sonraki import'lar tutarlı olsun diye env var'ı normalize et.
-    os.environ["IFC_DATA_HOME"] = str(home)
-    return home
-
-
-# Modül yüklendiğinde bir kez çöz; tüm alt modüller bu değeri paylaşır.
-try:
-    DATA_HOME: Path = resolve_data_home(create=True)
-except RuntimeError:
-    # Geç çözümleme: bazı script'ler kendi argümanlarını parse edip
-    # sonradan `os.environ["IFC_DATA_HOME"]` set edebilir. O zaman
-    # ilk gerçek erişimde çözeriz.
-    DATA_HOME = None  # type: ignore[assignment]
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return PARENT_ROOT / "data"
 
 
 def data_home() -> Path:
-    """Lazy erişim — DATA_HOME boşsa şimdi çöz."""
-    global DATA_HOME
-    if DATA_HOME is None:
-        DATA_HOME = resolve_data_home(create=True)
-    return DATA_HOME
+    """Veri kök klasörü; yoksa oluştur."""
+    home = _resolve_data_home()
+    home.mkdir(parents=True, exist_ok=True)
+    os.environ["IFC_DATA_HOME"] = str(home)
+    return home
 
 
 def _sub(name: str) -> Path:
@@ -107,21 +109,38 @@ def exports_dir() -> Path:
 
 
 def ml_runs_dir() -> Path:
-    return _sub("ml_runs")
+    return _sub("runs")
+
+
+def logs_dir() -> Path:
+    return _sub("logs")
 
 
 def db_path() -> Path:
     return data_home() / "violation_pool.sqlite"
 
 
-def env_file() -> Path:
-    return data_home() / ".env"
+# ----------------------------- status helpers -----------------------------
+
+def secrets_ok() -> bool:
+    return secrets_file() is not None and bool(os.getenv("OPENAI_API_KEY", "").strip())
 
 
-# .env dosyalarını yükle: önce veri reposundaki (asıl), sonra program
-# reposundaki (geriye dönük uyumluluk için, ama yoksa sorun değil).
-if DATA_HOME is not None:
-    _data_env = env_file()
-    if _data_env.exists():
-        load_dotenv(_data_env, override=False)
-load_dotenv(_PROGRAM_ROOT / ".env", override=False)
+def status() -> dict:
+    """UI üst başlığında gösterilecek özet."""
+    return {
+        "program_root": str(PROGRAM_ROOT),
+        "parent_root": str(PARENT_ROOT),
+        "data_home": str(data_home()),
+        "secrets_file": str(secrets_file()) if secrets_file() else None,
+        "openai_api_key": "set" if os.getenv("OPENAI_API_KEY", "").strip() else "missing",
+    }
+
+
+# Modül import edildiğinde bir kez secrets'i yükle ve veri kökünü garantiye al.
+load_secrets()
+data_home()
+
+
+# Geriye uyum: bazı eski modüller `DATA_HOME` sabitini import ediyordu.
+DATA_HOME: Path = data_home()
