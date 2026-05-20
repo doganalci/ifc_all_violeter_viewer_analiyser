@@ -10,6 +10,32 @@ from pathlib import Path
 from typing import Iterable
 
 from .config import settings
+from paths import data_home
+
+
+_PATH_KEYS = ("file_path", "meta_path", "labels_path", "graph_path")
+
+
+def _resolve_data_path(p: str | None) -> str | None:
+    """SQLite'ta göreli kaydedilmiş path'leri data_home'a göre çöz.
+
+    Eski codex1 verileri `ifc_models/baseline/<id>.ifc` gibi göreli
+    saklandı. Yeni yerleşimde cwd repo klasörü olduğu için bu yollar
+    açılamıyor. Burada absolute hale getiriyoruz.
+    """
+    if not p:
+        return p
+    pp = Path(p)
+    if pp.is_absolute():
+        return str(pp)
+    return str((data_home() / pp).resolve())
+
+
+def _resolve_row(d: dict) -> dict:
+    for k in _PATH_KEYS:
+        if k in d:
+            d[k] = _resolve_data_path(d[k])
+    return d
 
 
 SCHEMA = """
@@ -344,13 +370,13 @@ def list_ifc_models(kind: str | None = None) -> list[dict]:
     q += " ORDER BY datetime(created_at) DESC"
     with _conn() as c:
         rows = c.execute(q, args).fetchall()
-    return [dict(r) for r in rows]
+    return [_resolve_row(dict(r)) for r in rows]
 
 
 def get_ifc_model(ifc_id: str) -> dict | None:
     with _conn() as c:
         r = c.execute("SELECT * FROM ifc_models WHERE id=?", (ifc_id,)).fetchone()
-    return dict(r) if r else None
+    return _resolve_row(dict(r)) if r else None
 
 
 def delete_ifc_model(ifc_id: str) -> None:

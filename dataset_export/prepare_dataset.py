@@ -46,8 +46,11 @@ def _kinds(arg_kind: str, include_baseline: bool) -> list[str]:
     if arg_kind == "all":
         kinds = ["violated"]
         if include_baseline:
-            kinds = ["baseline", "violated", "imports"]
+            # Not: folder adları kullanılır. `imported` türünün folder'ı
+            # `imports`, `baseline_uploaded` türünün folder'ı kendisiyle aynı.
+            kinds = ["baseline", "baseline_uploaded", "violated", "imports"]
         return kinds
+    # tek-tür filtre: kullanıcı `baseline_uploaded` da geçebilsin
     return [arg_kind]
 
 
@@ -144,7 +147,9 @@ def main() -> int:
         help="Veri klasörü (varsayılan: IFC_DATA_HOME veya kardeş ifc_desktop_doc_dataset/)",
     )
     p.add_argument(
-        "--kind", choices=["violated", "baseline", "imports", "all"], default="violated",
+        "--kind",
+        choices=["violated", "baseline", "baseline_uploaded", "imports", "all"],
+        default="violated",
         help="Hangi türü pakete dahil et (varsayılan: violated)",
     )
     p.add_argument(

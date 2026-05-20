@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Iterable
 
 import networkx as nx
+import streamlit as st
 
 from .ifc3d import (
     COLOR_BASE, COLOR_DECOY, COLOR_PATH, COLOR_PATH_ALT,
@@ -131,7 +132,14 @@ def interactive_agraph(
         link={"renderLabel": False},
         # The vis-network defaults work; we keep this small on purpose.
     )
-    return agraph(nodes=nodes, edges=edges, config=cfg)
+    # Streamlit-agraph'ın `agraph()` signature'ı (nodes, edges, config) — key
+    # parametresi yok. Ama her grafiğin ayrı bir Streamlit slot'unda render
+    # edilmesi için kullanıcı tıklamasının doğru panele atfedilmesi gerekiyor.
+    # Bunun için her grafiği kendi container'ında render ediyoruz (key
+    # implicit olarak container'dan gelir).
+    with st.container():
+        clicked = agraph(nodes=nodes, edges=edges, config=cfg)
+    return clicked
 
 
 def _node_tooltip(nid: str, d: dict) -> str:

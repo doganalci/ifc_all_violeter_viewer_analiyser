@@ -176,6 +176,9 @@ def db_summary(db_path: Path) -> dict[str, int]:
             "runs": n("SELECT COUNT(*) FROM runs"),
             "violations": n("SELECT COUNT(*) FROM violations"),
             "baseline": n("SELECT COUNT(*) FROM ifc_models WHERE kind='baseline'"),
+            "baseline_uploaded": n(
+                "SELECT COUNT(*) FROM ifc_models WHERE kind='baseline_uploaded'"
+            ),
             "violated": n("SELECT COUNT(*) FROM ifc_models WHERE kind='violated'"),
             "imported": n("SELECT COUNT(*) FROM ifc_models WHERE kind='imported'"),
             "labels": n("SELECT COUNT(*) FROM ifc_violation_labels"),

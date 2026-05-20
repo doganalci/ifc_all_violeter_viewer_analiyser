@@ -18,7 +18,7 @@ from viewer.config import (
 )
 
 st.set_page_config(
-    page_title="Erişilebilirlik Dataset Viewer",
+    page_title="Dataset Görüntüleyici",
     page_icon="🔎",
     layout="wide",
 )
@@ -147,8 +147,10 @@ def _sidebar(df_full: pd.DataFrame | None) -> DatasetPaths | None:
     c1, c2 = st.sidebar.columns(2)
     c1.metric("Run", s["runs"]); c2.metric("Kural", s["violations"])
     c1.metric("Baseline", s["baseline"]); c2.metric("Violated", s["violated"])
-    c1.metric("Imported", s["imported"]); c2.metric("Etiket", s["labels"])
-    c1.metric("Decoy", s["decoys"]); c2.metric("Token", f"{s['tokens']:,}")
+    c1.metric("Yüklenen baseline", s.get("baseline_uploaded", 0))
+    c2.metric("Imported", s["imported"])
+    c1.metric("Etiket", s["labels"]); c2.metric("Decoy", s["decoys"])
+    c1.metric("Token", f"{s['tokens']:,}")
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📋 Dosyalar")
@@ -472,7 +474,10 @@ def _render_graph(paths: DatasetPaths, model: dict, hl: set, dc: set,
 
 
 def _kind_emoji(kind: str) -> str:
-    return {"baseline": "🏛️", "violated": "🚫", "imported": "📥"}.get(kind, "📄")
+    return {
+        "baseline": "🏛️", "baseline_uploaded": "📦",
+        "violated": "🚫", "imported": "📥",
+    }.get(kind, "📄")
 
 
 # ---------------- Detail ----------------
@@ -530,7 +535,10 @@ def page_detail(paths: DatasetPaths) -> None:
     parent_model = None
     if model.get("parent_id"):
         parent_model = db.get_ifc_model(paths.db, model["parent_id"])
-    children = _children(str(paths.db), model["id"]) if model["kind"] == "baseline" else []
+    children = (
+        _children(str(paths.db), model["id"])
+        if model["kind"] in ("baseline", "baseline_uploaded") else []
+    )
 
     # Compare option
     compare = False
@@ -556,7 +564,7 @@ def page_detail(paths: DatasetPaths) -> None:
     info_cols[4].metric("Token", f"{usage['total_tokens']:,}")
 
     # Derived violated list for baselines
-    if model["kind"] == "baseline" and children:
+    if model["kind"] in ("baseline", "baseline_uploaded") and children:
         with st.expander(f"🧬 Bu baseline'dan türetilmiş {len(children)} violated"):
             counts_map = _label_counts(str(paths.db))
             child_rows = []

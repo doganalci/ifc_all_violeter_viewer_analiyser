@@ -330,23 +330,44 @@ def generate_baseline(
             "status": status, "error": err, "mode": mode}
 
 
+# kind → klasör adı eşlemesi.
+# Not: eski `imported` türünde folder adı `imports` (geriye uyumluluk).
+# Yeni `baseline_uploaded` türünde column = folder adı (tutarlı).
+_KIND_TO_DIR = {
+    "imported": "imports",
+    "baseline_uploaded": "baseline_uploaded",
+}
+
+
 def import_real_ifc(
     *,
     src_path: str | Path,
     name: str | None = None,
+    kind: str = "imported",
 ) -> dict:
     """Dışarıdan gerçek bir IFC dosyasını projeye al; graph ve meta üret;
-    storage'a kind='imported' olarak kaydet.
+    storage'a verilen ``kind`` değeriyle kaydet.
+
+    Default ``kind='imported'`` (ad-hoc içe aktarma). Kullanıcı klasör
+    yüklemelerinde ``kind='baseline_uploaded'`` geçer — canonical baseline
+    olarak işaretlenir, ihlal enjeksiyonuna kaynak ve GAT eğitimine
+    baseline olarak girer.
     """
     from . import storage, ifc_graph as _ifc_graph
     import shutil
+
+    if kind not in _KIND_TO_DIR:
+        raise ValueError(
+            f"import_real_ifc: desteklenmeyen kind={kind!r}; "
+            f"izinli: {sorted(_KIND_TO_DIR)}"
+        )
 
     src = Path(src_path)
     if not src.exists():
         raise FileNotFoundError(str(src))
 
     ifc_id = str(uuid.uuid4())
-    out_dir = settings.ifc_dir / "imports"
+    out_dir = settings.ifc_dir / _KIND_TO_DIR[kind]
     out_dir.mkdir(parents=True, exist_ok=True)
     ifc_path = out_dir / f"{ifc_id}.ifc"
     shutil.copyfile(src, ifc_path)
@@ -367,7 +388,7 @@ def import_real_ifc(
     meta = {
         "ifc_id": ifc_id,
         "name": name or src.name,
-        "kind": "imported",
+        "kind": kind,
         "source_filename": src.name,
         "status": status,
         "error": err,
@@ -379,7 +400,7 @@ def import_real_ifc(
 
     mid = storage.create_ifc_model(
         id=ifc_id,
-        kind="imported", name=(name or src.name), parent_id=None,
+        kind=kind, name=(name or src.name), parent_id=None,
         llm_model="-", prompt=None, pool_run_id=None,
         params={"source_filename": src.name},
         file_path=str(ifc_path), meta_path=str(meta_path),
