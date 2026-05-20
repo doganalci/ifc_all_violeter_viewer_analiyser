@@ -1,0 +1,239 @@
+"""Tab: GAT inference + visual review of predictions.
+
+Workflow:
+  1. Pick a trained checkpoint (anything under ./runs/).
+  2. We rebuild the model with the matching config, run the selected
+     IFC through it, and threshold the probabilities.
+  3. The graph + IFC views colour each node with its prediction.
+     Predictions are layered on top of the ground truth so you can
+     visually inspect TP / FP / FN / decoy fooling.
+  4. Metrics from this single IFC are displayed alongside.
+
+If no checkpoint exists yet, the page links the user to the training
+command.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import streamlit as st
+
+_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_ROOT))
+sys.path.insert(0, str(_ROOT / "ml"))
+
+from app.state import load_sample_for, sidebar_config
+from data.pyg_dataset import sample_to_data
+from train.config import TrainConfig
+from train.metrics import evaluate_predictions
+from viz.graph_view import static_plotly
+from viz.ifc3d import build_figure, extract_meshes
+
+
+@st.cache_data(show_spinner="IFC tessellate ediliyor...")
+def _cached_meshes(ifc_path: str, _mtime: float):
+    return extract_meshes(ifc_path)
+
+
+def _mtime_safe(p: str) -> float:
+    import os
+    try:
+        return os.path.getmtime(p)
+    except OSError:
+        return 0.0
+
+
+def _list_runs(run_dir: Path) -> list[Path]:
+    if not run_dir.exists():
+        return []
+    return sorted([p for p in run_dir.iterdir()
+                   if p.is_dir() and (p / "best.pt").exists()])
+
+
+def _load_model(cfg: TrainConfig, in_dim: int, num_edge_types: int):
+    # Lazy: avoid pulling torch on pages that don't need it.
+    import torch
+    from model.gat import GATNodeClassifier
+    from model.hetero_gat import HeteroGATNodeClassifier
+
+    if cfg.model == "hetero_gat":
+        m = HeteroGATNodeClassifier(
+            in_dim=in_dim, hidden_dim=cfg.hidden_dim,
+            num_edge_types=num_edge_types, heads=cfg.heads, dropout=cfg.dropout,
+        )
+    else:
+        m = GATNodeClassifier(
+            in_dim=in_dim, hidden_dim=cfg.hidden_dim,
+            num_edge_types=num_edge_types, edge_emb_dim=cfg.edge_emb_dim,
+            heads=cfg.heads, dropout=cfg.dropout,
+        )
+    return m
+
+
+st.set_page_config(page_title="GAT Tespiti", layout="wide", page_icon="🤖")
+entry = sidebar_config()
+
+st.title("🤖 GAT Tespiti")
+st.caption("Eğitilmiş Graph Attention Network ile node-level ihlal tespiti.")
+
+if entry is None:
+    st.stop()
+
+run_root = Path("runs")
+runs = _list_runs(run_root)
+if not runs:
+    st.info(
+        "Henüz eğitilmiş model yok. Önce şunu çalıştır:\n\n"
+        "```bash\n"
+        "python -m scripts.train --dataset-root <codex1_path>\n"
+        "```"
+    )
+    st.stop()
+
+col_run, col_th = st.columns([3, 1])
+with col_run:
+    run = st.selectbox("Eğitim run", options=runs, format_func=lambda p: p.name)
+with col_th:
+    threshold = st.slider("Eşik", 0.0, 1.0, 0.5, 0.05)
+
+cfg_path = run / "config.json"
+ckpt_path = run / "best.pt"
+if not cfg_path.exists():
+    st.error("config.json bulunamadı — bu run düzgün kaydedilmemiş.")
+    st.stop()
+
+cfg = TrainConfig(**json.loads(cfg_path.read_text()))
+
+# Show training summary if available.
+summary_p = run / "summary.json"
+if summary_p.exists():
+    summary = json.loads(summary_p.read_text())
+    with st.expander("📊 Eğitim özeti", expanded=False):
+        st.write(f"best_val_f1: **{summary.get('best_val_f1', 0):.3f}** "
+                 f"@ epoch {summary.get('best_epoch')}")
+        if summary.get("test"):
+            t = summary["test"]
+            st.write(f"test F1={t['f1']:.3f} · "
+                     f"P={t['precision']:.3f} · R={t['recall']:.3f} · "
+                     f"decoy_fpr={t['decoy_fpr']:.3f}")
+
+# Build PyG Data for the selected IFC.
+sample = load_sample_for(entry)
+g = sample.graph
+data = sample_to_data(sample)
+
+# Lazy torch import + inference.
+try:
+    import torch
+except ImportError:
+    st.error("PyTorch yüklü değil — `pip install torch torch_geometric`.")
+    st.stop()
+
+with st.spinner("Model çalıştırılıyor..."):
+    device = cfg.resolve_device()
+    model = _load_model(cfg, data.x.shape[1], int(data.edge_type.max().item()) + 1 if data.edge_type.numel() else 7)
+    state = torch.load(str(ckpt_path), map_location=device)
+    try:
+        model.load_state_dict(state)
+    except RuntimeError as e:
+        st.error(f"Checkpoint yüklenirken hata: {e}")
+        st.stop()
+    model.to(device).eval()
+    with torch.no_grad():
+        logits = model(data.x.to(device), data.edge_index.to(device),
+                       data.edge_type.to(device))
+        probs = torch.sigmoid(logits).cpu().numpy()
+
+preds = (probs >= threshold).astype(np.int64)
+y_true = data.y.cpu().numpy()
+decoy_mask = data.decoy_mask.cpu().numpy()
+res = evaluate_predictions(y_true, preds, decoy_mask, categories=data.categories)
+
+# ---- Per-IFC metrics --------------------------------------------------------
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("F1", f"{res.f1:.3f}")
+m2.metric("Precision", f"{res.precision:.3f}")
+m3.metric("Recall", f"{res.recall:.3f}")
+m4.metric("Decoy FPR", f"{res.decoy_fpr:.3f}",
+          help="Decoy node'lardan kaçı yanlışlıkla ihlal işaretlenmiş.")
+
+if res.per_category_recall:
+    with st.expander("Kategori başına recall"):
+        st.json(res.per_category_recall)
+
+# ---- Two-panel review -------------------------------------------------------
+st.divider()
+node_ids = data.node_ids
+predicted_guids = {node_ids[i] for i, p in enumerate(preds) if p == 1}
+true_guids = {node_ids[i] for i, y in enumerate(y_true) if y == 1}
+
+show = st.multiselect(
+    "Vurgu katmanları",
+    options=["Tahmin (GAT)", "Gerçek ihlaller", "Decoys"],
+    default=["Tahmin (GAT)", "Gerçek ihlaller"],
+)
+
+vio_show = true_guids if "Gerçek ihlaller" in show else set()
+pred_show = predicted_guids if "Tahmin (GAT)" in show else set()
+decoy_show = sample.decoy_guids if "Decoys" in show else set()
+
+left, right = st.columns(2)
+with left:
+    st.markdown("**Graph**")
+    # Tahminler → birinci yol rengi (yeşil); gerçek ihlaller → kırmızı vurgu.
+    fig = static_plotly(
+        g,
+        violation_guids=vio_show,
+        decoy_guids=decoy_show,
+        path_guids=pred_show,
+        height=620,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+with right:
+    st.markdown("**IFC 3D**")
+    if not entry["ifc_path"] or not Path(entry["ifc_path"]).exists():
+        st.caption("IFC dosyası yok.")
+    else:
+        try:
+            meshes = _cached_meshes(entry["ifc_path"], _mtime_safe(entry["ifc_path"]))
+        except Exception as e:
+            st.error(f"IFC açılamadı: {e}")
+            meshes = []
+        if meshes:
+            fig = build_figure(
+                meshes,
+                violation_guids=vio_show,
+                decoy_guids=decoy_show,
+                path_guids=pred_show,
+                height=620,
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+# ---- Confusion table --------------------------------------------------------
+st.divider()
+st.subheader("Hata analizi")
+tp = sorted(predicted_guids & true_guids)
+fp = sorted(predicted_guids - true_guids - set(decoy_show))
+fn = sorted(true_guids - predicted_guids)
+decoy_fp = sorted(predicted_guids & set(sample.decoy_guids))
+
+cols = st.columns(4)
+cols[0].metric("TP", len(tp))
+cols[1].metric("FP", len(fp))
+cols[2].metric("FN", len(fn))
+cols[3].metric("Decoy → FP", len(decoy_fp))
+
+with st.expander(f"FN (kaçırılan {len(fn)})"):
+    for guid in fn:
+        nd = g.nodes[guid]
+        st.write(f"• {nd.get('ifc_type', '?')}  ·  {guid}  ·  "
+                 f"{(nd.get('attributes') or {}).get('Name', '')}")
+
+with st.expander(f"FP (yanlış alarm {len(fp)})"):
+    for guid in fp:
+        nd = g.nodes[guid]
+        st.write(f"• {nd.get('ifc_type', '?')}  ·  {guid}  ·  "
+                 f"{(nd.get('attributes') or {}).get('Name', '')}")

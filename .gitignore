@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Ortamlar
+.venv/
+venv/
+env/
+.env
+.env.local
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+.ipynb_checkpoints/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Üretilen veri — IFC_DATA_HOME'da kalmalı, koda sızmamalı
+data/
+docs/
+vectorstore/
+exports/
+ifc_models/
+ml_runs/
+runs/
+checkpoints/
+predictions/
+mlruns/
+wandb/
+*.pt
+*.pth
+*.ckpt
+*.sqlite
+*.sqlite-journal
+
+# Test artefaktları
+data/cache/

@@ -1,0 +1,35 @@
+# Konsolide gereksinimler — codex1 + viewer + ml
+# torch ve torch_geometric'i CUDA/CPU'ya göre ayrı index'ten kurabilirsiniz:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install torch_geometric
+
+# Core
+streamlit>=1.32
+python-dotenv>=1.0
+pandas>=2.2
+numpy>=1.26
+tqdm>=4.65
+scikit-learn>=1.3
+matplotlib>=3.7
+
+# LLM / RAG
+openai>=1.40
+chromadb>=0.5
+pypdf>=4.2
+tiktoken>=0.7
+openpyxl>=3.1
+
+# IFC + Graph
+ifcopenshell>=0.7
+networkx>=3.2
+plotly>=5.20
+
+# ML (GAT)
+torch>=2.1
+torch_geometric>=2.4
+
+# Streamlit görselleştirme
+streamlit-agraph>=0.0.45
+
+# Geliştirme rahatlığı
+watchdog>=3.0
