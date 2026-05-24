@@ -150,19 +150,55 @@ with st.spinner("Model çalıştırılıyor..."):
 preds = (probs >= threshold).astype(np.int64)
 y_true = data.y.cpu().numpy()
 decoy_mask = data.decoy_mask.cpu().numpy()
-res = evaluate_predictions(y_true, preds, decoy_mask, categories=data.categories)
+res = evaluate_predictions(
+    y_true, preds, decoy_mask,
+    categories=data.categories,
+    y_score=probs,
+)
 
 # ---- Per-IFC metrics --------------------------------------------------------
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("F1", f"{res.f1:.3f}")
-m2.metric("Precision", f"{res.precision:.3f}")
-m3.metric("Recall", f"{res.recall:.3f}")
-m4.metric("Decoy FPR", f"{res.decoy_fpr:.3f}",
-          help="Decoy node'lardan kaçı yanlışlıkla ihlal işaretlenmiş.")
+r1 = st.columns(4)
+r1[0].metric("F1", f"{res.f1:.3f}")
+r1[1].metric("Precision", f"{res.precision:.3f}")
+r1[2].metric("Recall", f"{res.recall:.3f}")
+r1[3].metric("Accuracy", f"{res.accuracy:.3f}")
+r2 = st.columns(4)
+r2[0].metric("Balanced Acc", f"{res.balanced_accuracy:.3f}",
+             help="(TPR + TNR) / 2 — sınıf dengesizliğine sağlam.")
+r2[1].metric("MCC", f"{res.mcc:+.3f}",
+             help="Matthews correlation. -1..+1.")
+r2[2].metric("AUC-ROC", f"{res.auc_roc:.3f}",
+             help="Eşikten bağımsız sıralama gücü.")
+r2[3].metric("Decoy FPR", f"{res.decoy_fpr:.3f}",
+             help="Decoy node'lardan kaçı yanlışlıkla ihlal işaretlenmiş.")
+
+# Confusion matrix
+with st.expander("📐 Confusion Matrix", expanded=False):
+    import pandas as _pd
+    cm_df = _pd.DataFrame(
+        [[res.tn, res.fp], [res.fn, res.tp]],
+        index=["Gerçek: değil", "Gerçek: ihlal"],
+        columns=["Tahmin: değil", "Tahmin: ihlal"],
+    )
+    st.dataframe(cm_df, use_container_width=True)
+    st.caption(
+        f"TP={res.tp}  ·  FN={res.fn}  ·  FP={res.fp}  ·  TN={res.tn}"
+    )
 
 if res.per_category_recall:
-    with st.expander("Kategori başına recall"):
-        st.json(res.per_category_recall)
+    with st.expander("📂 Kategori başına P / R / F1"):
+        import pandas as _pd
+        rows = []
+        for c in sorted(set(res.per_category_recall) | set(res.per_category_precision)):
+            rows.append({
+                "kategori": c,
+                "precision": res.per_category_precision.get(c, 0.0),
+                "recall": res.per_category_recall.get(c, 0.0),
+                "f1": res.per_category_f1.get(c, 0.0),
+                "support": res.per_category_support.get(c, 0),
+            })
+        st.dataframe(_pd.DataFrame(rows).sort_values("f1"),
+                     hide_index=True, use_container_width=True)
 
 # ---- Two-panel review -------------------------------------------------------
 st.divider()

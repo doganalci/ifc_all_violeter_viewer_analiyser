@@ -268,18 +268,37 @@ if start:
             "f1": val_res.f1,
             "precision": val_res.precision,
             "recall": val_res.recall,
+            "balanced_acc": val_res.balanced_accuracy,
+            "mcc": val_res.mcc,
+            "auc_roc": val_res.auc_roc,
+            "accuracy": val_res.accuracy,
             "decoy_fpr": val_res.decoy_fpr,
         })
         progress_slot.progress(epoch / total_epochs,
                                text=f"epoch {epoch}/{total_epochs}  ·  "
                                     f"loss={train_loss:.4f}  f1={val_res.f1:.3f}")
-        m1, m2, m3, m4 = metric_slot.columns(4)
-        m1.metric("F1 (val)", f"{val_res.f1:.3f}")
-        m2.metric("Precision", f"{val_res.precision:.3f}")
-        m3.metric("Recall", f"{val_res.recall:.3f}")
-        m4.metric("Decoy FPR", f"{val_res.decoy_fpr:.3f}")
+        with metric_slot.container():
+            r1 = st.columns(4)
+            r1[0].metric("F1 (val)", f"{val_res.f1:.3f}")
+            r1[1].metric("Precision", f"{val_res.precision:.3f}")
+            r1[2].metric("Recall", f"{val_res.recall:.3f}")
+            r1[3].metric("Accuracy", f"{val_res.accuracy:.3f}")
+            r2 = st.columns(4)
+            r2[0].metric("Balanced Acc", f"{val_res.balanced_accuracy:.3f}",
+                         help="(TPR + TNR) / 2 — sınıf dengesizliğine sağlam.")
+            r2[1].metric("MCC", f"{val_res.mcc:+.3f}",
+                         help="Matthews correlation. -1..+1. 0 = rastgele.")
+            r2[2].metric("AUC-ROC", f"{val_res.auc_roc:.3f}",
+                         help="Eşikten bağımsız sıralama gücü.")
+            r2[3].metric("Decoy FPR", f"{val_res.decoy_fpr:.3f}",
+                         help="Decoy node'ların kaçını yanlışlıkla ihlal saydı.")
         df = pd.DataFrame(history_rows).set_index("epoch")
-        chart_slot.line_chart(df[["loss", "f1", "decoy_fpr"]])
+        with chart_slot.container():
+            c1, c2 = st.columns(2)
+            c1.caption("Loss & F1 & AUC")
+            c1.line_chart(df[["loss", "f1", "auc_roc"]])
+            c2.caption("Bal_acc & MCC & Decoy FPR")
+            c2.line_chart(df[["balanced_acc", "mcc", "decoy_fpr"]])
 
     def on_log(msg: str):
         log_buffer.append(msg)
@@ -301,13 +320,61 @@ if start:
 
     st.success("✅ Eğitim tamamlandı.")
     st.write(f"En iyi val F1: **{summary['best_val_f1']:.3f}** @ epoch {summary['best_epoch']}")
+
     if summary.get("test"):
         t = summary["test"]
-        st.write(
-            f"Test: F1={t['f1']:.3f}  ·  P={t['precision']:.3f}  ·  "
-            f"R={t['recall']:.3f}  ·  decoy_fpr={t['decoy_fpr']:.3f}"
-        )
+        st.subheader("📊 Test sonucu")
+        r1 = st.columns(4)
+        r1[0].metric("F1", f"{t['f1']:.3f}")
+        r1[1].metric("Precision", f"{t['precision']:.3f}")
+        r1[2].metric("Recall", f"{t['recall']:.3f}")
+        r1[3].metric("Accuracy", f"{t['accuracy']:.3f}")
+        r2 = st.columns(4)
+        r2[0].metric("Balanced Acc", f"{t.get('balanced_accuracy', 0):.3f}")
+        r2[1].metric("MCC", f"{t.get('mcc', 0):+.3f}")
+        r2[2].metric("AUC-ROC", f"{t.get('auc_roc', 0):.3f}")
+        r2[3].metric("Decoy FPR", f"{t['decoy_fpr']:.3f}")
+
+        # Confusion matrix
+        cm = t.get("confusion", {})
+        if cm:
+            st.markdown("**Confusion Matrix**")
+            cm_df = pd.DataFrame(
+                [[cm.get("tn", 0), cm.get("fp", 0)],
+                 [cm.get("fn", 0), cm.get("tp", 0)]],
+                index=["Gerçek: değil", "Gerçek: ihlal"],
+                columns=["Tahmin: değil", "Tahmin: ihlal"],
+            )
+            cc1, cc2 = st.columns([1, 2])
+            cc1.dataframe(cm_df, use_container_width=True)
+            cc2.caption(
+                f"**TP={cm.get('tp', 0)}** doğru yakalanan  ·  "
+                f"**FN={cm.get('fn', 0)}** kaçırılan ihlal  ·  "
+                f"**FP={cm.get('fp', 0)}** yanlış alarm  ·  "
+                f"**TN={cm.get('tn', 0)}** doğru reddedilen normal"
+            )
+
+        # Per-category P/R/F1
+        per_p = t.get("per_category_precision", {})
+        per_r = t.get("per_category_recall", {})
+        per_f = t.get("per_category_f1", {})
+        per_s = t.get("per_category_support", {})
+        if per_r:
+            st.markdown("**Kategori bazında P / R / F1**")
+            cat_rows = []
+            for c in sorted(set(per_r) | set(per_p)):
+                cat_rows.append({
+                    "kategori": c,
+                    "precision": per_p.get(c, 0.0),
+                    "recall": per_r.get(c, 0.0),
+                    "f1": per_f.get(c, 0.0),
+                    "support": per_s.get(c, 0),
+                })
+            cat_df = pd.DataFrame(cat_rows).sort_values("f1")
+            st.dataframe(cat_df, hide_index=True, use_container_width=True)
+
     st.code(summary["run_dir"])
     st.caption(
-        "🔍 Detaylı test için soldan **GAT Test** sayfasına geç, bu run'ı seç."
+        "🔍 Daha detaylı analiz için sol menüden **GAT Test** sayfasına geç, bu run'ı seç. "
+        "CLI'de `python ml/scripts/error_analysis.py` ve `sanity_check.py` daha kapsamlı rapor üretir."
     )
