@@ -199,53 +199,107 @@ if res.per_category_recall:
         st.dataframe(_pd.DataFrame(rows).sort_values("f1"),
                      hide_index=True, use_container_width=True)
 
-# ---- Two-panel review -------------------------------------------------------
+# ---- Three-way comparison: Baseline | Injected | Model Prediction ----------
 st.divider()
+st.subheader("🔍 Baseline · İhlal Edilmiş · Model Tahmini")
+st.caption(
+    "Üst sıra: IFC 3D · Alt sıra: Grafik görünüm. "
+    "Soldan sağa: ham baseline (temiz) → bizim enjekte ettiğimiz ihlaller "
+    "(kırmızı) → modelin tahmini (yeşil). FP/FN/decoy ayrımı için altta "
+    "ayrıca hata analizi tablosu."
+)
+
+from ml.app.state import entry_by_id, get_dataset_root  # local — sadece bu sayfa için
+import os as _os
+
 node_ids = data.node_ids
 predicted_guids = {node_ids[i] for i, p in enumerate(preds) if p == 1}
 true_guids = {node_ids[i] for i, y in enumerate(y_true) if y == 1}
+decoy_guids = set(sample.decoy_guids)
 
-show = st.multiselect(
-    "Vurgu katmanları",
-    options=["Tahmin (GAT)", "Gerçek ihlaller", "Decoys"],
-    default=["Tahmin (GAT)", "Gerçek ihlaller"],
-)
+# Baseline entry (varsa). entry["parent_id"] enjekte edilmiş IFC'nin
+# kaynak baseline'ına işaret eder.
+baseline_entry = None
+baseline_sample = None
+if entry.get("parent_id"):
+    baseline_entry = entry_by_id(get_dataset_root(), entry["parent_id"])
+    if baseline_entry and baseline_entry.get("graph_ok"):
+        baseline_sample = load_sample_for(baseline_entry)
 
-vio_show = true_guids if "Gerçek ihlaller" in show else set()
-pred_show = predicted_guids if "Tahmin (GAT)" in show else set()
-decoy_show = sample.decoy_guids if "Decoys" in show else set()
+cols_top = st.columns(3)
+cols_bot = st.columns(3)
 
-left, right = st.columns(2)
-with left:
-    st.markdown("**Graph**")
-    # Tahminler → birinci yol rengi (yeşil); gerçek ihlaller → kırmızı vurgu.
-    fig = static_plotly(
-        g,
-        violation_guids=vio_show,
-        decoy_guids=decoy_show,
-        path_guids=pred_show,
-        height=620,
+
+def _render_3d(slot, title: str, ifc_path: str | None,
+               highlights_red: set[str], highlights_green: set[str],
+               highlights_amber: set[str] = set()):
+    slot.markdown(f"**{title}**")
+    if not ifc_path or not _os.path.exists(ifc_path):
+        slot.caption("IFC dosyası bulunamadı.")
+        return
+    try:
+        meshes = _cached_meshes(ifc_path, _mtime_safe(ifc_path))
+    except Exception as e:
+        slot.error(f"IFC açılamadı: {e}")
+        return
+    if not meshes:
+        slot.caption("Boş mesh.")
+        return
+    fig = build_figure(
+        meshes,
+        violation_guids=highlights_red,
+        decoy_guids=highlights_amber,
+        path_guids=highlights_green,
+        height=480,
     )
-    st.plotly_chart(fig, use_container_width=True)
-with right:
-    st.markdown("**IFC 3D**")
-    if not entry["ifc_path"] or not Path(entry["ifc_path"]).exists():
-        st.caption("IFC dosyası yok.")
-    else:
-        try:
-            meshes = _cached_meshes(entry["ifc_path"], _mtime_safe(entry["ifc_path"]))
-        except Exception as e:
-            st.error(f"IFC açılamadı: {e}")
-            meshes = []
-        if meshes:
-            fig = build_figure(
-                meshes,
-                violation_guids=vio_show,
-                decoy_guids=decoy_show,
-                path_guids=pred_show,
-                height=620,
-            )
-            st.plotly_chart(fig, use_container_width=True)
+    slot.plotly_chart(fig, use_container_width=True)
+
+
+def _render_graph(slot, title: str, graph,
+                  highlights_red: set[str], highlights_green: set[str],
+                  highlights_amber: set[str] = set()):
+    slot.markdown(f"**{title}**")
+    if graph is None:
+        slot.caption("Grafik yok.")
+        return
+    fig = static_plotly(
+        graph,
+        violation_guids=highlights_red,
+        decoy_guids=highlights_amber,
+        path_guids=highlights_green,
+        height=420,
+    )
+    slot.plotly_chart(fig, use_container_width=True)
+
+
+# Sütun 1 — BASELINE (temiz, vurgu yok)
+baseline_ifc = baseline_entry.get("ifc_path") if baseline_entry else None
+baseline_graph = baseline_sample.graph if baseline_sample else None
+_render_3d(cols_top[0], "🧱 Baseline IFC (ham)",
+           baseline_ifc, set(), set())
+_render_graph(cols_bot[0], "Baseline grafik",
+              baseline_graph, set(), set())
+if baseline_entry is None:
+    cols_top[0].caption("Bu kayıt için baseline yok (parent_id boş veya imports).")
+
+# Sütun 2 — INJECTED / GROUND TRUTH (kırmızı = gerçek enjekte ihlaller, sarı = decoy)
+_render_3d(cols_top[1], "💥 İhlal Edilmiş IFC (gerçek)",
+           entry["ifc_path"], true_guids, set(), decoy_guids)
+_render_graph(cols_bot[1], "İhlal grafiği (kırmızı=gerçek, sarı=decoy)",
+              g, true_guids, set(), decoy_guids)
+
+# Sütun 3 — MODEL PREDICTION (yeşil = tahmin)
+_render_3d(cols_top[2], "🤖 Model Tahmini",
+           entry["ifc_path"], set(), predicted_guids)
+_render_graph(cols_bot[2], "Tahmin grafiği (yeşil=GAT)",
+              g, set(), predicted_guids)
+
+st.caption(
+    "💡 Yeşil + kırmızı çakışıyor → **TP** (doğru bulundu). "
+    "Sadece yeşil → **FP** (yanlış alarm). "
+    "Sadece kırmızı → **FN** (kaçırıldı). "
+    "Sarı tonlar decoy'lar — model bunlara yeşil verirse kanmış demektir."
+)
 
 # ---- Confusion table --------------------------------------------------------
 st.divider()
