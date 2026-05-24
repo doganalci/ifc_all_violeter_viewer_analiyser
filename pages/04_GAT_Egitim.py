@@ -443,9 +443,10 @@ if start:
     st.success("✅ Eğitim tamamlandı.")
     st.write(f"En iyi val F1: **{summary['best_val_f1']:.3f}** @ epoch {summary['best_epoch']}")
 
-    if summary.get("test"):
-        t = summary["test"]
-        st.subheader("📊 Test sonucu")
+    def _render_split_metrics(t: dict | None, split_label: str):
+        if not t:
+            st.info(f"{split_label} split boş ya da hesaplanmadı.")
+            return
         r1 = st.columns(4)
         r1[0].metric("F1", f"{t['f1']:.3f}")
         r1[1].metric("Precision", f"{t['precision']:.3f}")
@@ -457,7 +458,6 @@ if start:
         r2[2].metric("AUC-ROC", f"{t.get('auc_roc', 0):.3f}")
         r2[3].metric("Decoy FPR", f"{t['decoy_fpr']:.3f}")
 
-        # Confusion matrix
         cm = t.get("confusion", {})
         if cm:
             st.markdown("**Confusion Matrix**")
@@ -476,15 +476,12 @@ if start:
                 f"**TN={cm.get('tn', 0)}** doğru reddedilen normal"
             )
 
-        # Per-category breakdown
         per_p = t.get("per_category_precision", {})
         per_r = t.get("per_category_recall", {})
         per_f = t.get("per_category_f1", {})
         per_s = t.get("per_category_support", {})
         if per_r:
-            st.markdown("### Kategori Bazında Performans")
-
-            # Sayısal tablo: P/R/F1/Support + türetilmiş TP/FN
+            st.markdown("**Kategori Bazında P / R / F1**")
             cat_rows = []
             for c in sorted(set(per_r) | set(per_p)):
                 sup = int(per_s.get(c, 0))
@@ -502,28 +499,46 @@ if start:
                 })
             cat_df = pd.DataFrame(cat_rows).sort_values("f1")
             st.dataframe(cat_df, hide_index=True, use_container_width=True)
-
-            # Stacked bar: TP (yeşil) + FN (kırmızı) per kategori
-            st.markdown("**TP / FN dağılımı (kaç pozitif yakaladık vs kaçırdık)**")
-            stack_df = cat_df[["kategori", "TP", "FN"]].set_index("kategori")
-            st.bar_chart(stack_df, color=["#22c55e", "#ef4444"])
-
-            # Renk-kodlu metrik bar chart
-            st.markdown("**Precision / Recall / F1 — kategoriler arası karşılaştırma**")
-            metric_df = cat_df.set_index("kategori")[["precision", "recall", "f1"]]
-            st.bar_chart(metric_df)
-
-            # Uyarı: zayıf kategoriler
+            st.markdown("**TP / FN dağılımı**")
+            st.bar_chart(cat_df[["kategori", "TP", "FN"]].set_index("kategori"),
+                         color=["#22c55e", "#ef4444"])
             weak = cat_df[cat_df["f1"] < 0.7]
             if not weak.empty:
-                with st.expander(f"⚠️ Zayıf kategoriler ({len(weak)})", expanded=True):
+                with st.expander(f"⚠️ Zayıf kategoriler ({len(weak)})", expanded=False):
                     for _, row in weak.iterrows():
                         st.warning(
                             f"**{row['kategori']}** — F1={row['f1']:.2f} "
-                            f"(R={row['recall']:.2f}, P={row['precision']:.2f}) "
-                            f"· {row['TP']}/{row['support']} yakalandı, "
-                            f"{row['FN']} kaçırıldı."
+                            f"({row['TP']}/{row['support']} yakalandı, "
+                            f"{row['FN']} kaçırıldı)"
                         )
+
+    st.subheader("📊 Sonuçlar (en iyi model — best.pt)")
+    # Train / Val / Test farkını anla — overfit / generalization sinyali
+    def _f1(d): return d.get("f1", 0) if d else 0
+    t_f1, v_f1, te_f1 = _f1(summary.get("train")), _f1(summary.get("val")), _f1(summary.get("test"))
+    overview = st.columns(4)
+    overview[0].metric("Train F1", f"{t_f1:.3f}")
+    overview[1].metric("Val F1", f"{v_f1:.3f}",
+                        delta=f"{v_f1 - t_f1:+.3f}",
+                        delta_color="inverse",
+                        help="Train'den çok düşükse overfit, çok yüksekse şüphe.")
+    overview[2].metric("Test F1", f"{te_f1:.3f}",
+                        delta=f"{te_f1 - v_f1:+.3f}",
+                        delta_color="inverse",
+                        help="Val'den ciddi farklıysa validation set güvenilir değil.")
+    gap = t_f1 - te_f1
+    overview[3].metric("Train - Test gap", f"{gap:+.3f}",
+                        help="Generalization gap. >0.2 ise muhtemelen overfitting.")
+
+    tab_tr, tab_va, tab_te = st.tabs([
+        f"🟦 Train ({t_f1:.3f})", f"🟨 Val ({v_f1:.3f})", f"🟥 Test ({te_f1:.3f})"
+    ])
+    with tab_tr:
+        _render_split_metrics(summary.get("train"), "Train")
+    with tab_va:
+        _render_split_metrics(summary.get("val"), "Val")
+    with tab_te:
+        _render_split_metrics(summary.get("test"), "Test")
 
     st.code(summary["run_dir"])
     st.caption(

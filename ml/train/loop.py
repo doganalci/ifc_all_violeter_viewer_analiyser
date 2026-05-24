@@ -263,20 +263,30 @@ def run_training(
                 stopped_early = True
                 break
 
-    # Restore best weights for test.
+    # Restore best weights for final evaluation on all three splits.
     ckpt = run_dir / "best.pt"
     if ckpt.exists():
         model.load_state_dict(torch.load(ckpt, map_location=device))
 
+    train_eval_loader = DataLoader(ds[splits.train], batch_size=4, shuffle=False)
+    train_res = (
+        _eval(model, train_eval_loader, device, cfg.threshold).to_dict()
+        if splits.train else None
+    )
+    val_res = (
+        _eval(model, val_loader, device, cfg.threshold).to_dict()
+        if val_loader is not None else None
+    )
     test_res = (
         _eval(model, test_loader, device, cfg.threshold).to_dict()
-        if test_loader is not None
-        else None
+        if test_loader is not None else None
     )
 
     summary = {
         "best_epoch": best_epoch,
         "best_val_f1": best_f1,
+        "train": train_res,
+        "val": val_res,
         "test": test_res,
         "history": history,
         "stopped_early": stopped_early,
