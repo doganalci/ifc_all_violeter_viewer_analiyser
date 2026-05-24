@@ -141,6 +141,50 @@ def env_file() -> Path:
     return data_home() / ".env"
 
 
+def resolve_stored_path(p: str | Path | None) -> Optional[Path]:
+    """DB'de saklanan bir dosya yolunu mevcut IFC_DATA_HOME'a göre çöz.
+
+    Veriler başka bir makinede veya eski klasör yerleşiminde üretildiyse
+    DB'deki mutlak yol artık geçerli olmayabilir. Bu fonksiyon dört
+    aşamayla dener:
+      1) Yol absolut ve mevcut → olduğu gibi döndür
+      2) Yol görece → IFC_DATA_HOME'a göre çöz
+      3) Sadece dosya adıyla IFC_DATA_HOME/ifc_models/{baseline,violated,imports}/
+         altında arama yap
+      4) Bulunamazsa None döner (orijinal hata kullanıcıya gösterilir)
+    """
+    if not p:
+        return None
+    candidate = Path(str(p)).expanduser()
+
+    if candidate.is_absolute() and candidate.exists():
+        return candidate
+
+    if not candidate.is_absolute():
+        try:
+            anchored = (data_home() / candidate).resolve()
+        except RuntimeError:
+            anchored = None
+        if anchored and anchored.exists():
+            return anchored
+
+    # Filename-based search under IFC_DATA_HOME/ifc_models/*
+    name = candidate.name
+    try:
+        models_root = ifc_models_dir()
+    except RuntimeError:
+        return None
+    for kind in ("baseline", "violated", "imports"):
+        cand = models_root / kind / name
+        if cand.exists():
+            return cand
+    # Son çare: tüm ifc_models altında rglob (yavaş ama emniyet)
+    for found in models_root.rglob(name):
+        if found.is_file():
+            return found
+    return None
+
+
 # Veri klasöründeki .env (API anahtarları vs.) — program .env zaten
 # yukarıda yüklendi, override etmiyoruz.
 if DATA_HOME is not None:

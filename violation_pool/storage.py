@@ -335,6 +335,27 @@ def set_ifc_graph_path(ifc_id: str, graph_path: str) -> None:
         c.execute("UPDATE ifc_models SET graph_path=? WHERE id=?", (graph_path, ifc_id))
 
 
+def _resolve_paths(row: dict) -> dict:
+    """DB'deki dosya yollarını mevcut IFC_DATA_HOME'a göre yeniden çöz.
+
+    Veriler başka makinede / eski klasörde üretildiyse mutlak yollar
+    kırılır. Bu fonksiyon her ifc kaydının `file_path`, `meta_path`,
+    `labels_path`, `graph_path` alanlarını gerçek dosya konumuna günceller
+    (DB'yi yazmaz, sadece okumada çevirir). Bulunamazsa orijinal değer
+    korunur ki hata mesajı bilgi verici olsun.
+    """
+    # Lazy import: paths modülü violation_pool'a bağlı değil (circular değil
+    # ama gereksiz yere import zamanını uzatmamak için).
+    from paths import resolve_stored_path
+    for key in ("file_path", "meta_path", "labels_path", "graph_path"):
+        v = row.get(key)
+        if v:
+            resolved = resolve_stored_path(v)
+            if resolved is not None:
+                row[key] = str(resolved)
+    return row
+
+
 def list_ifc_models(kind: str | None = None) -> list[dict]:
     q = "SELECT * FROM ifc_models"
     args: tuple = ()
@@ -344,13 +365,13 @@ def list_ifc_models(kind: str | None = None) -> list[dict]:
     q += " ORDER BY datetime(created_at) DESC"
     with _conn() as c:
         rows = c.execute(q, args).fetchall()
-    return [dict(r) for r in rows]
+    return [_resolve_paths(dict(r)) for r in rows]
 
 
 def get_ifc_model(ifc_id: str) -> dict | None:
     with _conn() as c:
         r = c.execute("SELECT * FROM ifc_models WHERE id=?", (ifc_id,)).fetchone()
-    return dict(r) if r else None
+    return _resolve_paths(dict(r)) if r else None
 
 
 def delete_ifc_model(ifc_id: str) -> None:
