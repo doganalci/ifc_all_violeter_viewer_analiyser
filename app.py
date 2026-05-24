@@ -874,35 +874,79 @@ with top_ifc:
                 f"= toplam {ne_real + ne_decoys} işaretli eleman."
             )
 
-            if st.button("Seçilen ihlalleri enjekte et", type="primary",
-                         disabled=not (sel_base and selected_ids)):
+            # Toplu mod: pakete bağlı tüm baseline'lara N varyantla enjekte
+            st.divider()
+            st.markdown("### 🔁 Toplu enjeksiyon — paket × varyant")
+            st.caption(
+                "Üstte 📦 paket seçtiysen, o paketin **TÜM** baseline'larına "
+                "girdiğin **varyant sayısı** kadar farklı kombinasyonla ihlal "
+                "enjekte eder. Örnek: 50 baseline × 5 varyant = 250 violated IFC."
+            )
+            tb1, tb2, tb3 = st.columns([1, 1, 2])
+            with tb1:
+                batch_variants = st.number_input(
+                    "🔁 Baseline başına varyant", 1, 50, 5,
+                    key="single_batch_variants",
+                    help="Aynı baseline'a farklı rastgele tohumla bu kadar "
+                         "ayrı violated IFC üretir.",
+                )
+            with tb2:
+                batch_seed_start = st.number_input(
+                    "Tohum başlangıç", 0, 99999, 1000,
+                    key="single_batch_seed",
+                )
+            with tb3:
+                _bn = len(sources)
+                _tot = _bn * int(batch_variants)
+                st.metric(f"✨ Üretilecek toplam violated",
+                          f"{_bn} × {int(batch_variants)} = {_tot}",
+                          help=f"Filtre: paket={inj_tag}, kaynak adedi={_bn}")
+
+            bcol_a, bcol_b = st.columns(2)
+            with bcol_a:
+                run_single = st.button(
+                    "Sadece seçili IFC'ye enjekte et",
+                    disabled=not (sel_base and selected_ids),
+                )
+            with bcol_b:
+                run_batch = st.button(
+                    f"🚀 PAKETİN TÜMÜNE enjekte et ({_tot} violated)",
+                    type="primary",
+                    disabled=not (sources and selected_ids and sel_pool),
+                    help="Üstte filtrelenmiş paketin tüm baseline/imported "
+                         "kayıtlarına varyant sayısı kadar enjeksiyon yapar.",
+                )
+
+            def _inject_one(base_id: str, seed: int):
+                """Tek baseline'a tek varyant enjeksiyon."""
+                picked = [v for v in pool_vs if v["id"] in selected_ids]
+                return ifc_inject.inject_violations(
+                    baseline_id=base_id, violations=picked,
+                    pool_run_id=sel_pool,
+                    model=inj_model.strip() or None,
+                    selection_filter={
+                        "category": (None if cat_filter == "(hepsi)" else cat_filter),
+                        "severity": sev_filter or None,
+                        "selected_ids": selected_ids,
+                        "decoy_ratio": decoy_ratio,
+                        "fill_from_pool": fill_from_pool,
+                        "variant_seed": seed,
+                    },
+                    decoy_ratio=decoy_ratio,
+                    decoy_seed=int(seed),
+                    fill_from_pool=fill_from_pool,
+                )
+
+            if run_single:
                 try:
-                    picked = [v for v in pool_vs if v["id"] in selected_ids]
                     with st.spinner(
-                        f"{len(picked)} ihlal sırayla deneniyor "
-                        "(her biri için ayrı LLM çağrısı)..."
+                        f"{len(selected_ids)} ihlal deneniyor..."
                     ):
-                        out = ifc_inject.inject_violations(
-                            baseline_id=sel_base, violations=picked,
-                            pool_run_id=sel_pool,
-                            model=inj_model.strip() or None,
-                            selection_filter={
-                                "category": (None if cat_filter == "(hepsi)" else cat_filter),
-                                "severity": sev_filter or None,
-                                "selected_ids": selected_ids,
-                                "decoy_ratio": decoy_ratio,
-                                "fill_from_pool": fill_from_pool,
-                            },
-                            decoy_ratio=decoy_ratio,
-                            decoy_seed=int(decoy_seed),
-                            fill_from_pool=fill_from_pool,
-                        )
+                        out = _inject_one(sel_base, int(decoy_seed))
                     inj_tot = storage.usage_totals(ifc_model_id=out["ifc_model_id"])
                     s = out["summary"]
                     repl = s.get("replaced_from_pool", 0)
-                    repl_txt = (
-                        f"; yedek havuzdan: **{repl}**" if repl else ""
-                    )
+                    repl_txt = f"; yedek havuzdan: **{repl}**" if repl else ""
                     st.success(
                         f"Bitti. İstenen: {s['requested']}, "
                         f"uygulanan: **{s['applied']}**, "
@@ -914,6 +958,42 @@ with top_ifc:
                     )
                 except Exception as e:
                     st.error(f"Hata: {e}")
+
+            if run_batch:
+                bar = st.progress(0.0, text="başlatılıyor...")
+                logs: list[str] = []
+                log_slot = st.empty()
+                results = []
+                total = len(sources) * int(batch_variants)
+                done = 0
+                for bi, baseline_m in enumerate(sources):
+                    for vi in range(int(batch_variants)):
+                        seed = int(batch_seed_start) + bi * int(batch_variants) + vi
+                        try:
+                            out = _inject_one(baseline_m["id"], seed)
+                            s = out["summary"]
+                            results.append({"ok": True, "summary": s, "id": out["ifc_model_id"]})
+                            logs.append(
+                                f"  ✓ [{done+1}/{total}] {baseline_m['name']} v{vi+1} "
+                                f"seed={seed} → applied={s['applied']}/req={s['requested']}"
+                            )
+                        except Exception as e:
+                            results.append({"ok": False, "error": str(e)})
+                            logs.append(
+                                f"  ✗ [{done+1}/{total}] {baseline_m['name']} v{vi+1} "
+                                f"seed={seed} → HATA: {e}"
+                            )
+                        done += 1
+                        bar.progress(done / total,
+                                     text=f"{done}/{total} · {baseline_m['name']} v{vi+1}")
+                        log_slot.code("\n".join(logs[-25:]))
+                bar.empty()
+                ok = sum(1 for r in results if r["ok"])
+                bad = len(results) - ok
+                st.success(
+                    f"🎉 Toplu enjeksiyon bitti. "
+                    f"**{ok}** başarılı, {bad} hata, toplam {len(results)} violated IFC üretildi."
+                )
 
     # -------- Otomatik Dataset Pipeline --------
     with ifc_tpipe:
@@ -1137,12 +1217,29 @@ with top_ifc:
 
         # Varyant + ihlal parametreleri
         cp1, cp2, cp3 = st.columns(3)
-        variants = cp1.number_input("Her baseline için varyant sayısı",
-                                     1, 50, 3, key="pipe_var_n")
+        variants = cp1.number_input(
+            "🔁 Her baseline için varyant sayısı",
+            1, 50, 5, key="pipe_var_n",
+            help="Aynı baseline'a farklı ihlal kombinasyonları enjekte "
+                 "edip bu sayı kadar ayrı violated IFC üretir. Toplam "
+                 "üretim = baseline sayısı × bu sayı.",
+        )
         vio_per = cp2.number_input("Her varyantta ihlal sayısı",
-                                    1, 100, 10, key="pipe_vio_per")
+                                    1, 100, 10, key="pipe_vio_per",
+            help="Her varyantta IFC'ye uygulanacak ihlal adedi.")
         pipe_decoy = cp3.slider("Decoy %", 0, 100, 20,
                                  key="pipe_decoy") / 100.0
+
+        # Büyük önizleme: kaç violated IFC üretilecek
+        _eff_n = len(existing_ids) if bsource == "Mevcutları kullan" else int(n_baselines)
+        _total_violated = _eff_n * int(variants)
+        _total_inj_calls = _total_violated * int(vio_per)
+        prev_a, prev_b, prev_c = st.columns(3)
+        prev_a.metric("📦 Baseline sayısı", _eff_n)
+        prev_b.metric("🔁 Varyant / baseline", int(variants))
+        prev_c.metric("✨ Toplam violated IFC", _total_violated,
+                      help=f"{_eff_n} × {int(variants)} = {_total_violated}. "
+                           f"Yaklaşık {_total_inj_calls} LLM enjeksiyon çağrısı.")
         cp4, cp5 = st.columns(2)
         pipe_ifc_model = cp4.text_input("Baseline LLM modeli",
                                          value=settings.ifc_llm_model,
