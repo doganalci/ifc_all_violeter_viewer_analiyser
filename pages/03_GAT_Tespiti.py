@@ -357,14 +357,81 @@ cols[1].metric("FP", len(fp))
 cols[2].metric("FN", len(fn))
 cols[3].metric("Decoy → FP", len(decoy_fp))
 
-with st.expander(f"FN (kaçırılan {len(fn)})"):
+# ---- Eleman (IFC tipi) bazında confusion matrix ----------------------------
+st.markdown("### IFC Eleman Tipine Göre Confusion Matrix")
+st.caption(
+    "Hangi tipte eleman (Door, Stair, Wall, …) için modelin nerede başarılı "
+    "ve nerede zorlandığı. TP+FN sütununa bakarak modelin **hangi tipte** "
+    "ihlal yakaladığını veya kaçırdığını görebilirsin."
+)
+
+import pandas as _pd
+
+def _type_of(guid: str) -> str:
+    nd = g.nodes.get(guid, {})
+    return nd.get("ifc_type") or nd.get("type") or "?"
+
+# Tüm IFC tiplerini topla
+all_types = sorted({_type_of(guid) for guid in node_ids})
+type_rows = []
+for t in all_types:
+    nodes_t = {guid for guid in node_ids if _type_of(guid) == t}
+    tp_t = len(set(tp) & nodes_t)
+    fp_t = len(set(fp) & nodes_t)
+    fn_t = len(set(fn) & nodes_t)
+    decoy_fp_t = len(set(decoy_fp) & nodes_t)
+    pos_t = tp_t + fn_t       # gerçek pozitif sayısı
+    pred_t = tp_t + fp_t      # tahmin edilen pozitif sayısı
+    tn_t = len(nodes_t) - tp_t - fp_t - fn_t
+    recall_t = (tp_t / pos_t) if pos_t else None
+    prec_t = (tp_t / pred_t) if pred_t else None
+    f1_t = (2 * prec_t * recall_t / (prec_t + recall_t)
+            if (prec_t and recall_t) else None)
+    type_rows.append({
+        "IFC tipi": t,
+        "Toplam": len(nodes_t),
+        "TP": tp_t,
+        "FP": fp_t,
+        "FN": fn_t,
+        "TN": tn_t,
+        "Decoy→FP": decoy_fp_t,
+        "Precision": round(prec_t, 3) if prec_t is not None else None,
+        "Recall": round(recall_t, 3) if recall_t is not None else None,
+        "F1": round(f1_t, 3) if f1_t is not None else None,
+    })
+
+type_df = _pd.DataFrame(type_rows)
+# Sadece eğitim/test sinyali olan satırları öncele (TP+FN+FP>0)
+type_df["_has_signal"] = (type_df["TP"] + type_df["FN"] + type_df["FP"]) > 0
+type_df = type_df.sort_values(
+    ["_has_signal", "F1", "FN"], ascending=[False, True, False]
+).drop(columns="_has_signal")
+st.dataframe(type_df, hide_index=True, use_container_width=True)
+
+# TP/FN/FP stacked bar — sinyali olan tipler için
+signal_df = type_df[(type_df["TP"] + type_df["FN"] + type_df["FP"]) > 0]
+if not signal_df.empty:
+    st.markdown("**Tip bazında dağılım** (yeşil=TP, kırmızı=FN, turuncu=FP)")
+    chart_df = signal_df[["IFC tipi", "TP", "FN", "FP"]].set_index("IFC tipi")
+    st.bar_chart(chart_df, color=["#22c55e", "#ef4444", "#f97316"])
+
+# ---- Liste expandlar -------------------------------------------------------
+with st.expander(f"❌ FN — kaçırılan {len(fn)} ihlal (tıkla → mavi vurgula)"):
     for guid in fn:
         nd = g.nodes[guid]
-        st.write(f"• {nd.get('ifc_type', '?')}  ·  {guid}  ·  "
+        c1, c2 = st.columns([5, 1])
+        c1.write(f"• **{nd.get('ifc_type', '?')}** · `{guid[:12]}…` · "
                  f"{(nd.get('attributes') or {}).get('Name', '')}")
+        if c2.button("👁", key=f"fn_{guid}", help="Bu node'u seç"):
+            set_selected_node(guid)
+            st.rerun()
 
-with st.expander(f"FP (yanlış alarm {len(fp)})"):
+with st.expander(f"⚠️ FP — yanlış alarm {len(fp)} (tıkla → mavi vurgula)"):
     for guid in fp:
         nd = g.nodes[guid]
-        st.write(f"• {nd.get('ifc_type', '?')}  ·  {guid}  ·  "
+        c1, c2 = st.columns([5, 1])
+        c1.write(f"• **{nd.get('ifc_type', '?')}** · `{guid[:12]}…` · "
                  f"{(nd.get('attributes') or {}).get('Name', '')}")
+        if c2.button("👁", key=f"fp_{guid}", help="Bu node'u seç"):
+            set_selected_node(guid)
+            st.rerun()
