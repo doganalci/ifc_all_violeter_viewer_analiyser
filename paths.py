@@ -31,12 +31,30 @@ def _from_env() -> Optional[Path]:
     raw = os.getenv("IFC_DATA_HOME", "").strip()
     if not raw:
         return None
-    return Path(raw).expanduser().resolve()
+    p = Path(raw).expanduser()
+    # Görece yol verildiyse önce program kökü, sonra cwd'ye göre çöz.
+    if not p.is_absolute():
+        cand1 = (_PROGRAM_ROOT / p).resolve()
+        if cand1.exists():
+            return cand1
+        cand2 = (Path.cwd() / p).resolve()
+        if cand2.exists():
+            return cand2
+        return cand1  # exist etmiyor olsa da bu seçim — create=True ile oluşur
+    return p.resolve()
 
 
 def _from_sibling() -> Optional[Path]:
-    cand = _PROGRAM_ROOT.parent / _SIBLING_NAME
-    return cand if cand.exists() else None
+    """Program kökünün hemen yanındaki olası veri klasörleri.
+
+    Adlar (öncelik sırası): `ifc_desktop_doc_dataset/`, `data/`
+    """
+    parent = _PROGRAM_ROOT.parent
+    for name in (_SIBLING_NAME, "data"):
+        cand = parent / name
+        if cand.exists():
+            return cand
+    return None
 
 
 def _from_desktop_fallback() -> Optional[Path]:
@@ -62,6 +80,11 @@ def resolve_data_home(create: bool = True) -> Path:
     os.environ["IFC_DATA_HOME"] = str(home)
     return home
 
+
+# Çözümleme öncesinde program kökündeki .env'yi yükle — kullanıcının
+# `IFC_DATA_HOME=...` satırını oraya yazabilmesi için. Veri klasöründeki
+# .env çözümlemeden sonra yüklenir (zaten oraya `OPENAI_API_KEY` vs. girer).
+load_dotenv(_PROGRAM_ROOT / ".env", override=False)
 
 # Modül yüklendiğinde bir kez çöz; tüm alt modüller bu değeri paylaşır.
 try:
@@ -118,10 +141,9 @@ def env_file() -> Path:
     return data_home() / ".env"
 
 
-# .env dosyalarını yükle: önce veri reposundaki (asıl), sonra program
-# reposundaki (geriye dönük uyumluluk için, ama yoksa sorun değil).
+# Veri klasöründeki .env (API anahtarları vs.) — program .env zaten
+# yukarıda yüklendi, override etmiyoruz.
 if DATA_HOME is not None:
     _data_env = env_file()
     if _data_env.exists():
         load_dotenv(_data_env, override=False)
-load_dotenv(_PROGRAM_ROOT / ".env", override=False)
