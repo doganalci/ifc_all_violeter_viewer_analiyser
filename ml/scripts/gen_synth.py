@@ -32,9 +32,20 @@ def main() -> None:
                         "Eğitimde dataset seçerken kullanılır.")
     a = p.parse_args()
 
-    import datetime as _dt
-    tag = a.tag or f"synth_{_dt.datetime.now().strftime('%Y%m%d_%H%M')}"
-    safe_tag = "".join(c if c.isalnum() or c in "-_" else "_" for c in tag.strip())
+    # Default tag: basic2+1_baseline_vNN (boş bulduğun en küçük indis)
+    if a.tag:
+        tag = a.tag
+    else:
+        try:
+            from violation_pool import storage as _st
+            existing = {t["tag"] for t in _st.list_dataset_tags()}
+        except Exception:
+            existing = set()
+        nxt = 1
+        while f"basic2+1_baseline_v{nxt:02d}" in existing:
+            nxt += 1
+        tag = f"basic2+1_baseline_v{nxt:02d}"
+    safe_tag = "".join(c if c.isalnum() or c in "-_+" else "_" for c in tag.strip())
     out = Path(a.out) if a.out else (ifc_models_dir() / "baseline" / safe_tag)
     params = SynthParams(add_windows=not a.no_windows)
 

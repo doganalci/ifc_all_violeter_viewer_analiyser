@@ -85,20 +85,39 @@ with pv_cols[1]:
 st.subheader("3. Toplu üretim")
 
 # Dataset etiketi — her üretim ayrı bir 'paket' (klasör + DB tag)
+# Default: 'basic2+1_baseline' + auto-incrementing version
 import datetime as _dt
-_default_tag = f"synth_{_dt.datetime.now().strftime('%Y%m%d_%H%M')}"
+import re as _re
+from violation_pool import storage as _storage
+
+_BASE_PREFIX = "basic2+1_baseline"
+try:
+    _existing_tags = {t["tag"] for t in _storage.list_dataset_tags()}
+except Exception:
+    _existing_tags = set()
+# v01, v02, ... boş ilk numarayı bul
+_next_v = 1
+while f"{_BASE_PREFIX}_v{_next_v:02d}" in _existing_tags:
+    _next_v += 1
+_default_tag = f"{_BASE_PREFIX}_v{_next_v:02d}"
+
 tag_cols = st.columns([3, 2])
 with tag_cols[0]:
     dataset_tag = st.text_input(
         "📦 Dataset adı (etiket)",
         value=_default_tag,
         help="Bu üretim ayrı bir klasöre yazılır + DB'de bu etiketle "
-             "işaretlenir. Eğitim sayfasında dataset seçerken bu isim "
-             "görünür. Aynı isim verirsen üzerine ekler.",
+             "işaretlenir. Eğitim ve enjeksiyon sayfalarında dataset "
+             "seçerken bu isim görünür. Tekrar aynı isim verirsen yan yana "
+             "eklenir (üzerine yazmaz).",
     )
 with tag_cols[1]:
-    safe_tag = "".join(c if c.isalnum() or c in "-_" else "_" for c in dataset_tag.strip()) or _default_tag
+    safe_tag = "".join(c if c.isalnum() or c in "-_+" else "_" for c in dataset_tag.strip()) or _default_tag
     st.caption(f"🗂 Klasör: `baseline/{safe_tag}/`")
+    if _existing_tags:
+        with st.popover("📋 Mevcut paketler", use_container_width=True):
+            for t in sorted(_existing_tags):
+                st.caption(f"• `{t}`")
 
 gen_cols = st.columns([2, 1, 1, 2])
 with gen_cols[0]:

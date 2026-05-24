@@ -1028,8 +1028,30 @@ with top_ifc:
                 {"violated"} if kind_filter == "violated" else
                 {"baseline", "imported", "violated"}
             )
-            existing = [m for m in storage.list_ifc_models()
-                        if m["kind"] in kinds and m["status"] == "ok"]
+
+            # Dataset_tag filtresi — Sentetik Üretim'den gelen paketler
+            try:
+                _all_tags_info = storage.list_dataset_tags()
+            except Exception:
+                _all_tags_info = []
+            _tag_options = ["(hepsi)"] + [t["tag"] for t in _all_tags_info]
+            pipe_tag = st.selectbox(
+                "📦 Dataset paketi (ismiyle filtrele)",
+                options=_tag_options,
+                index=0,
+                key="pipe_tag_filter",
+                help="Sentetik Üretim veya başka pipeline'larda etiketli "
+                     "paketler. Sadece bu paket içindeki IFC'lere enjekte etmek "
+                     "için seç. (hepsi) = filtre yok.",
+            )
+            if pipe_tag != "(hepsi)":
+                _allowed_tag_ids = set(storage.ifc_ids_for_tags([pipe_tag]))
+                existing = [m for m in storage.list_ifc_models()
+                            if m["kind"] in kinds and m["status"] == "ok"
+                            and m["id"] in _allowed_tag_ids]
+            else:
+                existing = [m for m in storage.list_ifc_models()
+                            if m["kind"] in kinds and m["status"] == "ok"]
             opt_ex = {m["id"]: f"[{m['kind']}] {m['name']} · {m['id'][:8]}"
                       for m in existing}
 
