@@ -880,27 +880,37 @@ with top_ifc:
             st.caption(
                 "Üstte 📦 paket seçtiysen, o paketin **TÜM** baseline'larına "
                 "girdiğin **varyant sayısı** kadar farklı kombinasyonla ihlal "
-                "enjekte eder. Örnek: 50 baseline × 5 varyant = 250 violated IFC."
+                "enjekte eder. Her varyant ihlal havuzundan **farklı rastgele "
+                "alt-küme** seçer — gerçek varyasyon. "
+                "Örnek: 50 baseline × 5 varyant = 250 violated IFC."
             )
-            tb1, tb2, tb3 = st.columns([1, 1, 2])
+            tb1, tb2, tb3, tb4 = st.columns([1, 1, 1, 2])
             with tb1:
                 batch_variants = st.number_input(
-                    "🔁 Baseline başına varyant", 1, 50, 5,
+                    "🔁 Varyant/baseline", 1, 50, 5,
                     key="single_batch_variants",
-                    help="Aynı baseline'a farklı rastgele tohumla bu kadar "
-                         "ayrı violated IFC üretir.",
+                    help="Aynı baseline'a kaç ayrı violated IFC üret",
                 )
             with tb2:
-                batch_seed_start = st.number_input(
-                    "Tohum başlangıç", 0, 99999, 1000,
-                    key="single_batch_seed",
+                batch_per_variant = st.number_input(
+                    "🎲 İhlal/varyant", 1, 200, min(10, max(1, len(selected_ids))),
+                    key="single_batch_per_var",
+                    help="Her varyantta seçili havuzdan rastgele bu kadar ihlal "
+                         "alınır. Seçili ihlal sayından küçük tutarsan her "
+                         "varyantta farklı alt-küme = gerçek çeşitlilik.",
                 )
             with tb3:
+                batch_seed_start = st.number_input(
+                    "Tohum", 0, 99999, 1000,
+                    key="single_batch_seed",
+                )
+            with tb4:
                 _bn = len(sources)
                 _tot = _bn * int(batch_variants)
                 st.metric(f"✨ Üretilecek toplam violated",
                           f"{_bn} × {int(batch_variants)} = {_tot}",
-                          help=f"Filtre: paket={inj_tag}, kaynak adedi={_bn}")
+                          help=f"Filtre: paket={inj_tag}, kaynak adedi={_bn}, "
+                               f"her IFC'de {int(batch_per_variant)} ihlal.")
 
             bcol_a, bcol_b = st.columns(2)
             with bcol_a:
@@ -917,9 +927,21 @@ with top_ifc:
                          "kayıtlarına varyant sayısı kadar enjeksiyon yapar.",
                 )
 
-            def _inject_one(base_id: str, seed: int):
-                """Tek baseline'a tek varyant enjeksiyon."""
-                picked = [v for v in pool_vs if v["id"] in selected_ids]
+            def _inject_one(base_id: str, seed: int,
+                            k_per_variant: int | None = None):
+                """Tek baseline'a tek varyant enjeksiyon.
+
+                k_per_variant verilirse seçili ihlal havuzundan rastgele
+                k adet alt-küme alır → her varyant farklı içerik = gerçek
+                çeşitlilik.
+                """
+                import random as _random
+                if k_per_variant is not None and k_per_variant < len(selected_ids):
+                    rng = _random.Random(seed)
+                    sub_ids = rng.sample(list(selected_ids), k_per_variant)
+                else:
+                    sub_ids = list(selected_ids)
+                picked = [v for v in pool_vs if v["id"] in sub_ids]
                 return ifc_inject.inject_violations(
                     baseline_id=base_id, violations=picked,
                     pool_run_id=sel_pool,
@@ -927,7 +949,7 @@ with top_ifc:
                     selection_filter={
                         "category": (None if cat_filter == "(hepsi)" else cat_filter),
                         "severity": sev_filter or None,
-                        "selected_ids": selected_ids,
+                        "selected_ids": sub_ids,
                         "decoy_ratio": decoy_ratio,
                         "fill_from_pool": fill_from_pool,
                         "variant_seed": seed,
@@ -970,7 +992,8 @@ with top_ifc:
                     for vi in range(int(batch_variants)):
                         seed = int(batch_seed_start) + bi * int(batch_variants) + vi
                         try:
-                            out = _inject_one(baseline_m["id"], seed)
+                            out = _inject_one(baseline_m["id"], seed,
+                                              k_per_variant=int(batch_per_variant))
                             s = out["summary"]
                             results.append({"ok": True, "summary": s, "id": out["ifc_model_id"]})
                             logs.append(

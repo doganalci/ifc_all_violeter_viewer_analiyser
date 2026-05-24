@@ -543,6 +543,9 @@ def inject_violations(
     except Exception:
         graph_path = None
 
+    # dataset_tag'ı parent baseline'dan miras al (varsa) — eğitim/listeleme
+    # sayfalarında violated IFC'ler parent paketle birlikte görünür.
+    _parent_tag = base.get("dataset_tag") if isinstance(base, dict) else None
     mid = storage.create_ifc_model(
         id=out_id,
         kind="violated", name=base["name"] + ".violated", parent_id=baseline_id,
@@ -550,6 +553,7 @@ def inject_violations(
         params={"summary": summary, "selection_filter": selection_filter or {}},
         file_path=str(out_ifc), meta_path=str(out_meta), labels_path=str(out_lab),
         graph_path=graph_path, status=status, error=None,
+        dataset_tag=_parent_tag,
     )
     storage.add_ifc_labels(mid, labels)
     return {
