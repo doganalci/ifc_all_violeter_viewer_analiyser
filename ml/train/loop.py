@@ -134,13 +134,24 @@ def run_training(
 
     _log(f"[train] device={device}  run_dir={run_dir}")
 
+    _log(f"[train] cache_root: {Path(cfg.cache_root).expanduser().resolve()}")
     ds_full = IFCViolationDataset(
         root=cfg.cache_root,
         dataset_root=cfg.dataset_root,
         include_baselines=cfg.include_baselines,
         use_rule_oracle=cfg.use_rule_oracle,
         mask_numeric_features=cfg.mask_numeric_features,
+        mask_pset_features=cfg.mask_pset_features,
+        mask_type_features=cfg.mask_type_features,
     )
+    _log(f"[train] cache file: {ds_full.processed_paths[0]}")
+    if ds_full.processed_paths[0]:
+        from os.path import exists, getmtime
+        from datetime import datetime as _dt
+        if exists(ds_full.processed_paths[0]):
+            _log(f"[train] cache mtime: {_dt.fromtimestamp(getmtime(ds_full.processed_paths[0]))}")
+        else:
+            _log("[train] cache yok — yeni oluşturuluyor")
     if filter_ifc_ids is not None:
         allow = set(filter_ifc_ids)
         keep = [i for i in range(len(ds_full)) if ds_full[i].ifc_id in allow]

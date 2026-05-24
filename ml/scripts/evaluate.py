@@ -59,6 +59,8 @@ def main() -> None:
         include_baselines=cfg.include_baselines,
         use_rule_oracle=getattr(cfg, "use_rule_oracle", False),
         mask_numeric_features=getattr(cfg, "mask_numeric_features", False),
+        mask_pset_features=getattr(cfg, "mask_pset_features", False),
+        mask_type_features=getattr(cfg, "mask_type_features", False),
     )
     baseline_ids = [ds[i].baseline_id for i in range(len(ds))]
     splits = split_by_baseline(

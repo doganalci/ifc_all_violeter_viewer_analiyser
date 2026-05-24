@@ -30,15 +30,17 @@ from .sqlite_reader import DatasetReader, iter_violated_with_paths
 _EDGE_INDEX = {t: i for i, t in enumerate(EDGE_TYPES)}
 
 
-def sample_to_data(sample: Sample, *, mask_numeric: bool = False) -> Data:
+def sample_to_data(sample: Sample, *, mask_numeric: bool = False,
+                   mask_psets: bool = False, mask_type: bool = False) -> Data:
     """Lift a `Sample` into a PyG `Data` object.
 
-    Args:
-        mask_numeric: True ise sayısal IFC attribute'ları feature olarak
-            sıfırlanır (feature leak teşhisi / azaltma için).
+    Mask parametreleri feature leak teşhisi içindir.
     """
     g = sample.graph
-    X, node_ids = build_node_features(g, mask_numeric=mask_numeric)
+    X, node_ids = build_node_features(
+        g, mask_numeric=mask_numeric,
+        mask_psets=mask_psets, mask_type=mask_type,
+    )
     idx_of = {nid: i for i, nid in enumerate(node_ids)}
 
     src: list[int] = []
@@ -95,12 +97,16 @@ class IFCViolationDataset(InMemoryDataset):
         include_baselines: bool = False,
         use_rule_oracle: bool = False,
         mask_numeric_features: bool = False,
+        mask_pset_features: bool = False,
+        mask_type_features: bool = False,
         transform: Callable | None = None,
     ):
         self._dataset_root = Path(dataset_root).expanduser().resolve()
         self._include_baselines = include_baselines
         self._use_rule_oracle = use_rule_oracle
         self._mask_numeric = mask_numeric_features
+        self._mask_psets = mask_pset_features
+        self._mask_type = mask_type_features
         super().__init__(str(Path(root)), transform=transform)
         self.load(self.processed_paths[0])
 
@@ -117,6 +123,10 @@ class IFCViolationDataset(InMemoryDataset):
             suffix += "_oracle"
         if self._mask_numeric:
             suffix += "_nonum"
+        if self._mask_psets:
+            suffix += "_nopset"
+        if self._mask_type:
+            suffix += "_notype"
         return [f"ifc_violation{suffix}.pt"]
 
     def download(self) -> None:  # noqa: D401
@@ -135,7 +145,7 @@ class IFCViolationDataset(InMemoryDataset):
                 if self._use_rule_oracle:
                     n_added, _ = augment_sample(sample)
                     oracle_total += n_added
-                data_list.append(sample_to_data(sample, mask_numeric=self._mask_numeric))
+                data_list.append(sample_to_data(sample, mask_numeric=self._mask_numeric, mask_psets=self._mask_psets, mask_type=self._mask_type))
             if self._include_baselines:
                 for entry in reader.list_baselines():
                     if not (entry.graph_path and entry.graph_path.exists()):
@@ -144,7 +154,7 @@ class IFCViolationDataset(InMemoryDataset):
                     if self._use_rule_oracle:
                         n_added, _ = augment_sample(sample)
                         oracle_total += n_added
-                    data_list.append(sample_to_data(sample, mask_numeric=self._mask_numeric))
+                    data_list.append(sample_to_data(sample, mask_numeric=self._mask_numeric, mask_psets=self._mask_psets, mask_type=self._mask_type))
         if self._use_rule_oracle:
             print(f"[oracle] {oracle_total} kural-tabanlı pozitif etiket eklendi "
                   f"({len(data_list)} IFC üzerinden)")

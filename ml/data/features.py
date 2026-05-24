@@ -91,37 +91,43 @@ def _is_external(psets: dict) -> int:
     return 0
 
 
-def build_node_features(g, *, mask_numeric: bool = False) -> tuple[np.ndarray, list[str]]:
+def build_node_features(g, *, mask_numeric: bool = False,
+                        mask_psets: bool = False,
+                        mask_type: bool = False) -> tuple[np.ndarray, list[str]]:
     """Return (X, node_ids). X has shape [N, FEATURE_DIM], rows aligned with node_ids.
 
+    Maskleme seçenekleri leak teşhisi için. FEATURE_DIM hep sabit kalır,
+    maskelenen sütunlar sıfır olarak yazılır.
+
     Args:
-        mask_numeric: True ise sayısal IFC attribute'ları (OverallWidth,
-            OverallHeight, NominalHeight, Elevation) sıfır olarak yazılır.
-            Feature leak teşhisi için: oracle / injection bu aynı değerleri
-            etiket eşiği olarak kullanıyor; feature olarak da görünce model
-            etiketi 'okuyup' kopya çekiyor. Bunlar gizlenince model graf
-            yapısı + tip + Pset bayraklarından inference yapmak zorunda.
-            FEATURE_DIM sabit kalır — sadece o sütunlar 0 olur.
+        mask_numeric: OverallWidth/Height/NominalHeight/Elevation sıfır.
+            (Injection ve oracle bu değerleri kullandığı için en güçlü leak.)
+        mask_psets:   Pset bayrakları + IsExternal + FireRating sıfır.
+            (Bazı injection tipleri Pset değiştirebilir.)
+        mask_type:    IFC tipi one-hot sıfır.
+            (add_obstruction yeni IfcColumn ekler — model 'yeni Column = ihlal'
+             diye trivial pattern bulabilir.)
     """
     node_ids = list(g.nodes)
     X = np.zeros((len(node_ids), FEATURE_DIM), dtype=np.float32)
     for i, nid in enumerate(node_ids):
         nd = g.nodes[nid]
         ifc_type = nd.get("ifc_type") or ""
-        if ifc_type in _TYPE_INDEX:
+        if not mask_type and ifc_type in _TYPE_INDEX:
             X[i, _TYPE_INDEX[ifc_type]] = 1.0
         off = len(NODE_TYPES)
         attrs = nd.get("attributes") or {}
         if not mask_numeric:
             for k, name in enumerate(_NUMERIC_ATTRS):
                 X[i, off + k] = _f(attrs.get(name))
-        # mask_numeric ise sayısal sütunlar 0 olarak kalır
         off += len(_NUMERIC_ATTRS)
         psets = nd.get("psets") or {}
-        for k, name in enumerate(_PSET_FLAGS):
-            X[i, off + k] = _pset_present(psets, name)
+        if not mask_psets:
+            for k, name in enumerate(_PSET_FLAGS):
+                X[i, off + k] = _pset_present(psets, name)
         off += len(_PSET_FLAGS)
-        X[i, off + 0] = _is_external(psets)
-        X[i, off + 1] = _has_fire_rating(psets)
+        if not mask_psets:
+            X[i, off + 0] = _is_external(psets)
+            X[i, off + 1] = _has_fire_rating(psets)
         X[i, off + 2] = 1.0 if ("x" in nd and "y" in nd) else 0.0
     return X, node_ids

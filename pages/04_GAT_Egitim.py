@@ -122,36 +122,65 @@ if not violated_entries:
         )
     st.stop()
 
-aug_cols = st.columns(3)
+st.caption("**Augmentation & Feature Maskeleme**")
+aug_cols = st.columns(2)
 with aug_cols[0]:
     include_baselines = st.checkbox(
         "Baseline'ları da dahil et",
         value=False,
         help="Açarsan ihlal içermeyen modeller de eğitim sinyaline katılır.",
     )
-with aug_cols[1]:
     use_rule_oracle = st.checkbox(
         "📏 Kural-tabanlı oracle augment",
         value=True,
         help=(
-            "Eğitim öncesi geometrik kurallarla (kapı <90 cm, korkuluk <90 cm, "
-            "vb.) etiketsiz ihlalleri pozitif olarak ekler. Closed-world "
-            "supervision sorununu çözer."
+            "Eğitim öncesi geometrik kurallarla (kapı <90 cm, korkuluk <90 cm) "
+            "etiketsiz ihlalleri pozitif olarak ekler. Closed-world supervision "
+            "sorununu çözer."
         ),
     )
-with aug_cols[2]:
+with aug_cols[1]:
+    st.caption("🔬 **Feature leak teşhisi** — gerçek F1'i görmek için maskele")
     mask_numeric_features = st.checkbox(
-        "🔬 Sızdıran feature'ları gizle",
+        "Sayısal attribute'ları gizle (OverallWidth/Height/...)",
         value=True,
-        help=(
-            "Sayısal IFC attribute'larını (OverallWidth, OverallHeight, "
-            "NominalHeight, Elevation) node feature'ından çıkar (0'la). "
-            "Bu değerler aynı zamanda enjeksiyon/oracle kuralının eşiği "
-            "olduğu için, feature olarak görünce model etiketi 'okur' ve "
-            "trivial F1=1.0 alır. Bu seçenek model'i grafik yapısı + tip + "
-            "Pset bayraklarından inference yapmaya zorlar — gerçek metrik."
-        ),
+        help="En güçlü leak: bu değerler injection/oracle eşiği olduğu için "
+             "feature olarak görünce model etiketi okur.",
     )
+    mask_pset_features = st.checkbox(
+        "Pset bayraklarını gizle (DoorCommon, IsExternal, FireRating)",
+        value=False,
+        help="Bazı enjeksiyon tipleri Pset değiştirebilir.",
+    )
+    mask_type_features = st.checkbox(
+        "IFC tipi one-hot gizle (Door/Stair/Column...)",
+        value=False,
+        help="add_obstruction yeni IfcColumn ekler — model 'yeni Column = "
+             "ihlal' diye trivial pattern bulabilir, bu seçenekle önle.",
+    )
+
+# Cache yönetimi — kullanıcı doğru cache'i temizlediğine emin olsun
+from pathlib import Path as _Path
+import datetime as _dt
+_cache_dir = _Path("./data/cache").expanduser().resolve()
+with st.expander("🗑 Cache yönetimi (mevcut: " + str(_cache_dir) + ")"):
+    if _cache_dir.exists():
+        cache_files = sorted(_cache_dir.glob("**/*.pt"))
+        if cache_files:
+            for cf in cache_files:
+                mt = _dt.datetime.fromtimestamp(cf.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                st.caption(f"  📦 `{cf.name}` ({cf.stat().st_size/1024:.1f} KB · {mt})")
+        else:
+            st.caption("  (cache boş)")
+        if st.button("🗑 Tüm cache'i sil",
+                     help="Sonraki eğitimde dataset baştan işlenir — feature "
+                          "değişikliği yaptıysan ŞART"):
+            import shutil as _sh
+            _sh.rmtree(_cache_dir, ignore_errors=True)
+            st.success("Cache silindi.")
+            st.rerun()
+    else:
+        st.caption("  (cache klasörü yok — ilk eğitimde oluşacak)")
 
 with st.expander("📖 Oracle kural listesi"):
     from ml.data.rule_oracle import summarize_rules
@@ -163,10 +192,16 @@ with st.expander("📖 Oracle kural listesi"):
         "ekle (cache invalidate olur)."
     )
 
-st.success(f"✅ {len(violated_entries)} violated IFC seçildi"
-           + (" (+ baseline'lar)" if include_baselines else "")
-           + (" + oracle augment" if use_rule_oracle else "")
-           + (" + sızdıran feature gizli" if mask_numeric_features else ""))
+_mask_summary = []
+if mask_numeric_features: _mask_summary.append("numeric")
+if mask_pset_features: _mask_summary.append("psets")
+if mask_type_features: _mask_summary.append("type")
+st.success(
+    f"✅ {len(violated_entries)} violated IFC seçildi"
+    + (" (+ baseline'lar)" if include_baselines else "")
+    + (" + oracle augment" if use_rule_oracle else "")
+    + (f" · maskeli: {','.join(_mask_summary)}" if _mask_summary else "")
+)
 
 # ---- Split control ----------------------------------------------------------
 st.subheader("2. Train / Val / Test bölünmesi")
@@ -251,6 +286,8 @@ cfg = TrainConfig(
     include_baselines=include_baselines,
     use_rule_oracle=use_rule_oracle,
     mask_numeric_features=mask_numeric_features,
+    mask_pset_features=mask_pset_features,
+    mask_type_features=mask_type_features,
     model=model_type,
     hidden_dim=int(hidden_dim),
     heads=int(heads),
