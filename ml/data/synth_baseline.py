@@ -225,10 +225,17 @@ def generate_batch(n: int, out_dir: str | Path,
     """
     out_dir = Path(out_dir).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Dosya adı prefix'i: dataset etiketi (örn basic2+1_baseline_v04).
+    # Böylece baseline + ondan türeyen violated izlenebilir adlar alır:
+    #   basic2+1_baseline_v04_00000.ifc → ..._00000_violated1.ifc
+    prefix = "synth_two_room"
+    if dataset_tag:
+        prefix = "".join(c if c.isalnum() or c in "-_+" else "_"
+                         for c in str(dataset_tag).strip()) or prefix
     results: list[dict] = []
     for i in range(n):
         seed = seed_start + i
-        ifc_path = out_dir / f"synth_two_room_{seed:05d}.ifc"
+        ifc_path = out_dir / f"{prefix}_{seed:05d}.ifc"
         info = generate(seed, ifc_path, params=params)
         info["dataset_tag"] = dataset_tag
         if register_in_db:
