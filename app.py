@@ -759,13 +759,31 @@ with top_ifc:
             "decoy'lardan ayırma kabiliyetini ölçmek için."
         )
 
-        sources = [m for m in storage.list_ifc_models()
-                   if m["kind"] in ("baseline", "imported") and m["status"] == "ok"]
+        # Dataset paketi ile filtrele — kaynak listesini daralt
+        try:
+            _tagsi = storage.list_dataset_tags()
+        except Exception:
+            _tagsi = []
+        _tags_opt = ["(hepsi)"] + [t["tag"] for t in _tagsi]
+        inj_tag = st.selectbox(
+            "📦 Dataset paketi (filtrele)",
+            options=_tags_opt, index=0,
+            key="inj_tag_filter",
+            help="Sadece bu paketin baseline/imported IFC'leri listelenir.",
+        )
+        if inj_tag != "(hepsi)":
+            _allowed = set(storage.ifc_ids_for_tags([inj_tag]))
+            sources = [m for m in storage.list_ifc_models()
+                       if m["kind"] in ("baseline", "imported") and m["status"] == "ok"
+                       and m["id"] in _allowed]
+        else:
+            sources = [m for m in storage.list_ifc_models()
+                       if m["kind"] in ("baseline", "imported") and m["status"] == "ok"]
         if not sources:
             st.warning("Önce geçerli (status=ok) bir baseline veya imported IFC olmalı.")
         bo = {m["id"]: f"[{m['kind']}] {m['name']} · {m['id'][:8]} · {m['created_at']}"
               for m in sources}
-        sel_base = st.selectbox("Kaynak IFC (baseline / imported)",
+        sel_base = st.selectbox(f"Kaynak IFC (baseline / imported) — {len(sources)} adet",
                                 list(bo.keys()) or [""],
                                 format_func=lambda k: bo.get(k, "-"))
 
@@ -1034,16 +1052,42 @@ with top_ifc:
                 _all_tags_info = storage.list_dataset_tags()
             except Exception:
                 _all_tags_info = []
+
+            # Paket özet tablosu — kullanıcı önce paket gördükten sonra seçsin
+            if _all_tags_info:
+                _tag_df = []
+                for t in _all_tags_info:
+                    _tag_df.append({
+                        "📦 paket": t["tag"],
+                        "baseline": t.get("baseline", 0),
+                        "violated": t.get("violated", 0),
+                        "imported": t.get("imported", 0),
+                        "toplam": t.get("total", 0),
+                    })
+                import pandas as _pd
+                st.caption("Mevcut dataset paketleri:")
+                st.dataframe(_pd.DataFrame(_tag_df), hide_index=True,
+                              use_container_width=True)
+
             _tag_options = ["(hepsi)"] + [t["tag"] for t in _all_tags_info]
-            pipe_tag = st.selectbox(
-                "📦 Dataset paketi (ismiyle filtrele)",
-                options=_tag_options,
-                index=0,
-                key="pipe_tag_filter",
-                help="Sentetik Üretim veya başka pipeline'larda etiketli "
-                     "paketler. Sadece bu paket içindeki IFC'lere enjekte etmek "
-                     "için seç. (hepsi) = filtre yok.",
-            )
+            tag_cols = st.columns([2, 1])
+            with tag_cols[0]:
+                pipe_tag = st.selectbox(
+                    "📦 Dataset paketi (paket adıyla filtrele)",
+                    options=_tag_options,
+                    index=0,
+                    key="pipe_tag_filter",
+                    help="Paket seçince listede sadece o paketin IFC'leri çıkar.",
+                )
+            with tag_cols[1]:
+                auto_select_all = st.checkbox(
+                    "✅ Paket seçilince TÜMÜNÜ otomatik seç",
+                    value=True,
+                    key="pipe_tag_autosel",
+                    help="Açıkken paket değiştirir değiştirmez paketin tüm "
+                         "IFC'leri seçili olur — tek tek tıklamana gerek kalmaz.",
+                )
+
             if pipe_tag != "(hepsi)":
                 _allowed_tag_ids = set(storage.ifc_ids_for_tags([pipe_tag]))
                 existing = [m for m in storage.list_ifc_models()
@@ -1057,15 +1101,32 @@ with top_ifc:
 
             # Hızlı seçim
             ke = "pipe_existing"
+            # Auto-select: tag değiştiğinde otomatik seçim yap
+            _last_tag_key = "pipe_tag_filter_last"
+            if auto_select_all and pipe_tag != "(hepsi)":
+                if st.session_state.get(_last_tag_key) != pipe_tag:
+                    st.session_state[ke] = list(opt_ex.keys())
+                    st.session_state[_last_tag_key] = pipe_tag
+            else:
+                st.session_state[_last_tag_key] = pipe_tag
             cur = [i for i in st.session_state.get(ke, []) if i in opt_ex]
             st.session_state[ke] = cur
-            qs1, qs2 = st.columns(2)
-            if qs1.button("Tümünü seç", key="pipe_btn_all"):
+
+            qs1, qs2, qs3 = st.columns(3)
+            if qs1.button(f"✅ Bu paketten TÜMÜ ({len(opt_ex)})",
+                          key="pipe_btn_all", use_container_width=True,
+                          type="primary"):
                 st.session_state[ke] = list(opt_ex.keys())
                 st.rerun()
-            if qs2.button("Seçimi temizle", key="pipe_btn_clr"):
+            if qs2.button("Seçimi temizle", key="pipe_btn_clr",
+                          use_container_width=True):
                 st.session_state[ke] = []
                 st.rerun()
+            with qs3:
+                st.caption(
+                    f"📊 Seçili: **{len(st.session_state.get(ke, []))}** / "
+                    f"{len(opt_ex)} (paket: `{pipe_tag}`)"
+                )
 
             existing_ids = st.multiselect(
                 f"Kullanılacak IFC'ler ({len(opt_ex)} adet uygun)",
