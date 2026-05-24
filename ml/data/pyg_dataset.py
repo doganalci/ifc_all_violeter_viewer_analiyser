@@ -154,11 +154,17 @@ class IFCViolationDataset(InMemoryDataset):
             conn.close()
             if not r or not r["m"]:
                 return
-            from datetime import datetime
+            from datetime import datetime, timezone
             try:
-                # SQLite created_at ISO formatında
-                db_latest = datetime.fromisoformat(r["m"].replace("Z", "+00:00")).timestamp()
+                # created_at = utcnow().isoformat() — naive ama UTC.
+                # .timestamp() naive'i YEREL sanır → UTC+3'te 3 saat kayar.
+                # UTC olarak işaretleyip epoch'a çevir (file mtime de epoch=UTC tabanlı).
+                _dt = datetime.fromisoformat(r["m"].replace("Z", ""))
+                db_latest = _dt.replace(tzinfo=timezone.utc).timestamp()
             except Exception:
+                # Parse edemezsek güvenli taraf: cache'i sil (yeniden işle).
+                print("[cache] created_at parse edilemedi; cache güvenlik için siliniyor.")
+                cache_file.unlink()
                 return
             if db_latest > cache_mtime + 1:   # 1s tolerans
                 print(f"[cache] stale: DB en yeni IFC ({r['m']}) > cache "
