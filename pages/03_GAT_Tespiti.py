@@ -203,10 +203,9 @@ if res.per_category_recall:
 st.divider()
 st.subheader("🔍 Baseline · İhlal Edilmiş · Model Tahmini")
 st.caption(
-    "Üst sıra: IFC 3D · Alt sıra: Grafik görünüm. "
+    "Üç sütun, her birinde **üstte IFC 3D** ve **altında grafik**. "
     "Soldan sağa: ham baseline (temiz) → bizim enjekte ettiğimiz ihlaller "
-    "(kırmızı) → modelin tahmini (yeşil). FP/FN/decoy ayrımı için altta "
-    "ayrıca hata analizi tablosu."
+    "(kırmızı) → modelin tahmini (yeşil)."
 )
 
 from ml.app.state import (
@@ -251,83 +250,91 @@ if selected_guid:
             set_selected_node(None)
             st.rerun()
 
-cols_top = st.columns(3)
-cols_bot = st.columns(3)
+cols = st.columns(3)
 
 
 def _render_3d(slot, title: str, ifc_path: str | None,
                highlights_red: set[str], highlights_green: set[str],
                highlights_amber: set[str] = set(),
                sel: str | None = None, key_suffix: str = ""):
-    slot.markdown(f"**{title}**")
-    if not ifc_path or not _os.path.exists(ifc_path):
-        slot.caption("IFC dosyası bulunamadı.")
-        return
-    try:
-        meshes = _cached_meshes(ifc_path, _mtime_safe(ifc_path))
-    except Exception as e:
-        slot.error(f"IFC açılamadı: {e}")
-        return
-    if not meshes:
-        slot.caption("Boş mesh.")
-        return
-    fig = build_figure(
-        meshes,
-        violation_guids=highlights_red,
-        decoy_guids=highlights_amber,
-        path_guids=highlights_green,
-        selected_guid=sel,        # 🔵 mavi vurgu
-        height=460,
-    )
-    slot.plotly_chart(fig, use_container_width=True, key=f"ifc_{key_suffix}")
+    """IFC 3D'yi sütun içinde render eder (plotly native — slot.X yeterli)."""
+    with slot:
+        st.markdown(f"**{title}**")
+        if not ifc_path or not _os.path.exists(ifc_path):
+            st.caption("IFC dosyası bulunamadı.")
+            return
+        try:
+            meshes = _cached_meshes(ifc_path, _mtime_safe(ifc_path))
+        except Exception as e:
+            st.error(f"IFC açılamadı: {e}")
+            return
+        if not meshes:
+            st.caption("Boş mesh.")
+            return
+        fig = build_figure(
+            meshes,
+            violation_guids=highlights_red,
+            decoy_guids=highlights_amber,
+            path_guids=highlights_green,
+            selected_guid=sel,        # 🔵 mavi vurgu
+            height=460,
+        )
+        st.plotly_chart(fig, use_container_width=True, key=f"ifc_{key_suffix}")
 
 
 def _render_graph(slot, title: str, graph,
                   highlights_red: set[str], highlights_green: set[str],
                   highlights_amber: set[str] = set(),
                   sel: str | None = None, key_suffix: str = "") -> str | None:
-    slot.markdown(f"**{title}**")
-    if graph is None:
-        slot.caption("Grafik yok.")
-        return None
-    # interactive_agraph: tıklanabilir + sürüklenebilir (vis-network)
-    clicked = interactive_agraph(
-        graph,
-        violation_guids=highlights_red,
-        decoy_guids=highlights_amber,
-        path_guids=highlights_green,
-        selected_guid=sel,
-        height=400,
-        key=f"graph_{key_suffix}",
-    )
-    return clicked
+    """Interaktif grafiği sütun içinde render eder.
+
+    `interactive_agraph` özel bir Streamlit component (vis-network); top-level
+    çağrıldığında sütun bağlamını algılamaz ve tüm genişliğe yayılır. Bu
+    yüzden `with slot:` bloğunun *içinde* çağırmak şart.
+    """
+    with slot:
+        st.markdown(f"**{title}**")
+        if graph is None:
+            st.caption("Grafik yok.")
+            return None
+        clicked = interactive_agraph(
+            graph,
+            violation_guids=highlights_red,
+            decoy_guids=highlights_amber,
+            path_guids=highlights_green,
+            selected_guid=sel,
+            height=400,
+            key=f"graph_{key_suffix}",
+        )
+        return clicked
+    return None
 
 
 # Sütun 1 — BASELINE (temiz, vurgu yok)
 baseline_ifc = baseline_entry.get("ifc_path") if baseline_entry else None
 baseline_graph = baseline_sample.graph if baseline_sample else None
-_render_3d(cols_top[0], "🧱 Baseline IFC (ham)",
+_render_3d(cols[0], "🧱 Baseline IFC (ham)",
            baseline_ifc, set(), set(),
            sel=selected_guid, key_suffix="baseline")
-clicked_base = _render_graph(cols_bot[0], "Baseline grafik",
+clicked_base = _render_graph(cols[0], "Baseline grafik",
                              baseline_graph, set(), set(),
                              sel=selected_guid, key_suffix="baseline")
 if baseline_entry is None:
-    cols_top[0].caption("Bu kayıt için baseline yok (parent_id boş veya imports).")
+    cols[0].caption("Bu kayıt için baseline yok (parent_id boş veya imports).")
 
 # Sütun 2 — INJECTED / GROUND TRUTH (kırmızı = gerçek enjekte ihlaller, sarı = decoy)
-_render_3d(cols_top[1], "💥 İhlal Edilmiş IFC (gerçek)",
+_render_3d(cols[1], "💥 İhlal Edilmiş IFC (gerçek)",
            entry["ifc_path"], true_guids, set(), decoy_guids,
            sel=selected_guid, key_suffix="violated")
-clicked_vio = _render_graph(cols_bot[1], "İhlal grafiği (kırmızı=gerçek, sarı=decoy)",
+clicked_vio = _render_graph(cols[1], "İhlal grafiği (kırmızı=gerçek, sarı=decoy)",
                             g, true_guids, set(), decoy_guids,
                             sel=selected_guid, key_suffix="violated")
 
 # Sütun 3 — MODEL PREDICTION (yeşil = tahmin)
-_render_3d(cols_top[2], "🤖 Model Tahmini",
+_render_3d(cols[2], "🤖 Model Tahmini",
            entry["ifc_path"], set(), predicted_guids,
            sel=selected_guid, key_suffix="pred")
-clicked_pred = _render_graph(cols_bot[2], "Tahmin grafiği (yeşil=GAT)",
+clicked_pred = _render_graph(cols[2], "Tahmin grafiği (yeşil=GAT)",
                              g, set(), predicted_guids,
                              sel=selected_guid, key_suffix="pred")
 
