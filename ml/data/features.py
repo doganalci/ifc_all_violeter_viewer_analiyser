@@ -91,8 +91,18 @@ def _is_external(psets: dict) -> int:
     return 0
 
 
-def build_node_features(g) -> tuple[np.ndarray, list[str]]:
-    """Return (X, node_ids). X has shape [N, FEATURE_DIM], rows aligned with node_ids."""
+def build_node_features(g, *, mask_numeric: bool = False) -> tuple[np.ndarray, list[str]]:
+    """Return (X, node_ids). X has shape [N, FEATURE_DIM], rows aligned with node_ids.
+
+    Args:
+        mask_numeric: True ise sayısal IFC attribute'ları (OverallWidth,
+            OverallHeight, NominalHeight, Elevation) sıfır olarak yazılır.
+            Feature leak teşhisi için: oracle / injection bu aynı değerleri
+            etiket eşiği olarak kullanıyor; feature olarak da görünce model
+            etiketi 'okuyup' kopya çekiyor. Bunlar gizlenince model graf
+            yapısı + tip + Pset bayraklarından inference yapmak zorunda.
+            FEATURE_DIM sabit kalır — sadece o sütunlar 0 olur.
+    """
     node_ids = list(g.nodes)
     X = np.zeros((len(node_ids), FEATURE_DIM), dtype=np.float32)
     for i, nid in enumerate(node_ids):
@@ -102,8 +112,10 @@ def build_node_features(g) -> tuple[np.ndarray, list[str]]:
             X[i, _TYPE_INDEX[ifc_type]] = 1.0
         off = len(NODE_TYPES)
         attrs = nd.get("attributes") or {}
-        for k, name in enumerate(_NUMERIC_ATTRS):
-            X[i, off + k] = _f(attrs.get(name))
+        if not mask_numeric:
+            for k, name in enumerate(_NUMERIC_ATTRS):
+                X[i, off + k] = _f(attrs.get(name))
+        # mask_numeric ise sayısal sütunlar 0 olarak kalır
         off += len(_NUMERIC_ATTRS)
         psets = nd.get("psets") or {}
         for k, name in enumerate(_PSET_FLAGS):

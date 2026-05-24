@@ -141,6 +141,7 @@ def run_ablation(cfg, ckpt, out: Path, threshold: float, device) -> dict:
         dataset_root=cfg.dataset_root,
         include_baselines=cfg.include_baselines,
         use_rule_oracle=getattr(cfg, "use_rule_oracle", False),
+        mask_numeric_features=getattr(cfg, "mask_numeric_features", False),
     )
     splits = split_by_baseline(
         ds.baseline_ids, val_frac=cfg.val_frac,

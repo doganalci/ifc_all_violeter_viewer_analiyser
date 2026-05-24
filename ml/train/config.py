@@ -10,7 +10,8 @@ class TrainConfig:
     dataset_root: str = "../codex1"
     cache_root: str = "./data/cache"
     include_baselines: bool = False
-    use_rule_oracle: bool = False     # Kural-tabanlı etiket augmentation
+    use_rule_oracle: bool = False         # Kural-tabanlı etiket augmentation
+    mask_numeric_features: bool = False   # Feature leak'i engelle (OverallWidth vb. sıfırla)
     val_frac: float = 0.15
     test_frac: float = 0.15
     split_seed: int = 0
