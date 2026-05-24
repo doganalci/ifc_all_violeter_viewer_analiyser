@@ -287,4 +287,21 @@ def run_training(
         cm = test_res["confusion"]
         _log(f"  TN={cm['tn']:>6d}  FP={cm['fp']:>6d}")
         _log(f"  FN={cm['fn']:>6d}  TP={cm['tp']:>6d}")
+
+    # macOS + torch + streamlit etkileşimindeki teardown segfault'unu
+    # azaltmak için açıkça temizlik yap. Her zaman çözmez ama bazen yardımı dokunur.
+    try:
+        import gc
+        del model, optim, loss_fn
+        del train_loader
+        if val_loader is not None:
+            del val_loader
+        if test_loader is not None:
+            del test_loader
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
     return summary
