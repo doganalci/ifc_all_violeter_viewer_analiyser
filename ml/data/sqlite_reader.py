@@ -153,7 +153,16 @@ class DatasetReader:
 
 
 def iter_violated_with_paths(reader: DatasetReader) -> Iterable[IFCEntry]:
-    """Yield only entries whose graph + labels files actually exist on disk."""
-    for e in reader.list_violated():
-        if e.graph_path and e.graph_path.exists() and e.labels_path and e.labels_path.exists():
-            yield e
+    """Yield only entries whose graph + labels files actually exist on disk.
+
+    `status='ok'` ve `status='partial'` (bazı enjeksiyonlar başarısız ama
+    IFC + graph + labels yine de yazılmış) kayıtlarını dahil eder.
+    """
+    seen: set[str] = set()
+    for status in ("ok", "partial"):
+        for e in reader.list_models(kind="violated", status=status):
+            if e.id in seen:
+                continue
+            if e.graph_path and e.graph_path.exists() and e.labels_path and e.labels_path.exists():
+                seen.add(e.id)
+                yield e
