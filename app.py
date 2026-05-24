@@ -912,6 +912,25 @@ with top_ifc:
                           help=f"Filtre: paket={inj_tag}, kaynak adedi={_bn}, "
                                f"her IFC'de {int(batch_per_variant)} ihlal.")
 
+            # Paralelizm — LLM çağrıları I/O-bound, thread pool 5-10x hızlandırır
+            par_cols = st.columns([1, 3])
+            with par_cols[0]:
+                batch_concurrency = st.number_input(
+                    "⚡ Eşzamanlı (paralel)", 1, 32, 8,
+                    key="single_batch_concurrency",
+                    help="Aynı anda kaç IFC enjeksiyonu çalışsın. LLM çağrıları "
+                         "I/O-bound olduğu için 8-16 arası tipik 8-16x hızlanma.",
+                )
+            with par_cols[1]:
+                _per_call = max(int(batch_per_variant), 1)
+                _seq_s = _tot * _per_call * 1.5
+                _par_s = _seq_s / max(int(batch_concurrency), 1)
+                st.caption(
+                    f"⏱ Tahmini süre: sıralı ~{_seq_s/60:.1f} dk · "
+                    f"{int(batch_concurrency)} paralel ~{_par_s/60:.1f} dk "
+                    f"(API hızına göre değişir)"
+                )
+
             bcol_a, bcol_b = st.columns(2)
             with bcol_a:
                 run_single = st.button(
@@ -982,40 +1001,77 @@ with top_ifc:
                     st.error(f"Hata: {e}")
 
             if run_batch:
+                import time as _time
+                from concurrent.futures import ThreadPoolExecutor, as_completed
                 bar = st.progress(0.0, text="başlatılıyor...")
                 logs: list[str] = []
                 log_slot = st.empty()
+                stat_slot = st.empty()
                 results = []
-                total = len(sources) * int(batch_variants)
-                done = 0
+                # Görev listesi: (bi, vi, baseline_m, seed)
+                tasks = []
                 for bi, baseline_m in enumerate(sources):
                     for vi in range(int(batch_variants)):
                         seed = int(batch_seed_start) + bi * int(batch_variants) + vi
-                        try:
-                            out = _inject_one(baseline_m["id"], seed,
-                                              k_per_variant=int(batch_per_variant))
-                            s = out["summary"]
-                            results.append({"ok": True, "summary": s, "id": out["ifc_model_id"]})
+                        tasks.append((bi, vi, baseline_m, seed))
+                total = len(tasks)
+                done = 0
+                ok_n = 0
+                bad_n = 0
+                t0 = _time.time()
+                conc = max(1, int(batch_concurrency))
+                logs.append(f"🚀 {total} görev, {conc} paralel iş parçacığı")
+                log_slot.code("\n".join(logs[-25:]))
+
+                def _work(task):
+                    bi, vi, baseline_m, seed = task
+                    try:
+                        out = _inject_one(baseline_m["id"], seed,
+                                          k_per_variant=int(batch_per_variant))
+                        return {"ok": True, "task": task, "out": out}
+                    except Exception as e:
+                        return {"ok": False, "task": task, "error": str(e)}
+
+                with ThreadPoolExecutor(max_workers=conc) as pool:
+                    futures = {pool.submit(_work, t): t for t in tasks}
+                    for fut in as_completed(futures):
+                        r = fut.result()
+                        bi, vi, baseline_m, seed = r["task"]
+                        if r["ok"]:
+                            s = r["out"]["summary"]
+                            ok_n += 1
+                            results.append({"ok": True, "summary": s,
+                                            "id": r["out"]["ifc_model_id"]})
                             logs.append(
                                 f"  ✓ [{done+1}/{total}] {baseline_m['name']} v{vi+1} "
                                 f"seed={seed} → applied={s['applied']}/req={s['requested']}"
                             )
-                        except Exception as e:
-                            results.append({"ok": False, "error": str(e)})
+                        else:
+                            bad_n += 1
+                            results.append({"ok": False, "error": r["error"]})
                             logs.append(
                                 f"  ✗ [{done+1}/{total}] {baseline_m['name']} v{vi+1} "
-                                f"seed={seed} → HATA: {e}"
+                                f"seed={seed} → HATA: {r['error'][:80]}"
                             )
                         done += 1
-                        bar.progress(done / total,
-                                     text=f"{done}/{total} · {baseline_m['name']} v{vi+1}")
+                        elapsed = _time.time() - t0
+                        rate = done / max(elapsed, 0.1)
+                        eta = (total - done) / max(rate, 0.01)
+                        bar.progress(
+                            done / total,
+                            text=f"{done}/{total} · {rate:.1f}/s · ETA {eta:.0f}s",
+                        )
+                        stat_slot.caption(
+                            f"✅ {ok_n} başarılı · ❌ {bad_n} hata · "
+                            f"⏱ geçen {elapsed:.0f}s · hız {rate:.2f} IFC/s"
+                        )
                         log_slot.code("\n".join(logs[-25:]))
                 bar.empty()
-                ok = sum(1 for r in results if r["ok"])
-                bad = len(results) - ok
                 st.success(
                     f"🎉 Toplu enjeksiyon bitti. "
-                    f"**{ok}** başarılı, {bad} hata, toplam {len(results)} violated IFC üretildi."
+                    f"**{ok_n}** başarılı, {bad_n} hata, "
+                    f"{total} toplam · {_time.time()-t0:.1f}s "
+                    f"(~{total/max(_time.time()-t0, 0.1):.2f} IFC/s)"
                 )
 
     # -------- Otomatik Dataset Pipeline --------
@@ -1274,6 +1330,12 @@ with top_ifc:
             "Uymayan ihlali havuzdan başkasıyla doldur",
             value=True, key="pipe_fill",
         )
+        pipe_concurrency = st.number_input(
+            "⚡ Paralel LLM iş parçacığı", 1, 32, 8,
+            key="pipe_concurrency",
+            help="Aynı anda kaç enjeksiyon çalışsın. LLM çağrıları I/O-bound; "
+                 "8-16 tipik 8-16x hızlanma. OpenAI rate-limit'e dikkat.",
+        )
 
         # Maliyet/zaman tahmini
         eff_n_base = len(existing_ids) if bsource == "Mevcutları kullan" else int(n_baselines)
@@ -1320,6 +1382,7 @@ with top_ifc:
                     ifc_model=pipe_ifc_model.strip() or None,
                     inject_model=pipe_inj_model.strip() or None,
                     fill_from_pool=pipe_fill,
+                    concurrency=int(pipe_concurrency),
                     progress_callback=cb,
                     name_prefix=name_prefix,
                     existing_baseline_ids=existing_ids or None,

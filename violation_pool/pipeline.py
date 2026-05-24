@@ -58,6 +58,7 @@ def run_pipeline(
     progress_callback: ProgressCB | None = None,
     name_prefix: str = "Auto",
     existing_baseline_ids: list[str] | None = None,
+    concurrency: int = 1,
 ) -> dict:
     """Tüm uçtan uca dataset oluşturma.
 
@@ -174,36 +175,68 @@ def run_pipeline(
     # ---- 2) Enjeksiyon aşaması: her baseline × M varyant ----
     total_inj = len(baseline_ids) * variants_per_baseline
     done = 0
+    # Görev listesi
+    tasks = []
     for bi, bid in enumerate(baseline_ids):
         for vi in range(variants_per_baseline):
-            done += 1
             seed = bi * 1000 + vi * 37 + 1
-            try:
-                rng = random.Random(seed)
-                picked = rng.sample(
-                    pool_vs, min(violations_per_variant, len(pool_vs))
-                )
+            tasks.append((bi, vi, bid, seed))
+
+    def _run_one(task):
+        bi, vi, bid, seed = task
+        try:
+            rng = random.Random(seed)
+            picked = rng.sample(
+                pool_vs, min(violations_per_variant, len(pool_vs))
+            )
+            out = ifc_inject.inject_violations(
+                baseline_id=bid, violations=picked,
+                pool_run_id=pool_run_id,
+                model=inject_model,
+                decoy_ratio=decoy_ratio,
+                decoy_seed=seed,
+                fill_from_pool=fill_from_pool,
+                selection_filter={
+                    "auto_pipeline": True,
+                    "baseline_idx": bi, "variant": vi,
+                    "violations_per_variant": violations_per_variant,
+                },
+            )
+            return ("ok", task, out)
+        except Exception as e:
+            return ("err", task, str(e))
+
+    if concurrency > 1:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = [pool.submit(_run_one, t) for t in tasks]
+            for fut in as_completed(futures):
+                kind, task, payload = fut.result()
+                bi, vi, bid, _ = task
+                done += 1
                 _emit("inject", done, total_inj,
-                      f"baseline {bi+1}/{len(baseline_ids)} varyant {vi+1}/{variants_per_baseline}")
-                out = ifc_inject.inject_violations(
-                    baseline_id=bid, violations=picked,
-                    pool_run_id=pool_run_id,
-                    model=inject_model,
-                    decoy_ratio=decoy_ratio,
-                    decoy_seed=seed,
-                    fill_from_pool=fill_from_pool,
-                    selection_filter={
-                        "auto_pipeline": True,
-                        "baseline_idx": bi, "variant": vi,
-                        "violations_per_variant": violations_per_variant,
-                    },
-                )
-                results["variated"].append(out)
-            except Exception as e:
+                      f"baseline {bi+1} varyant {vi+1} (par={concurrency})")
+                if kind == "ok":
+                    results["variated"].append(payload)
+                else:
+                    results["errors"].append({"phase": "inject",
+                                              "baseline_id": bid,
+                                              "variant": vi,
+                                              "error": payload})
+    else:
+        for task in tasks:
+            bi, vi, bid, _ = task
+            done += 1
+            _emit("inject", done, total_inj,
+                  f"baseline {bi+1}/{len(baseline_ids)} varyant {vi+1}/{variants_per_baseline}")
+            kind, _, payload = _run_one(task)
+            if kind == "ok":
+                results["variated"].append(payload)
+            else:
                 results["errors"].append({"phase": "inject",
                                           "baseline_id": bid,
                                           "variant": vi,
-                                          "error": str(e)})
+                                          "error": payload})
 
     results["summary"] = {
         "baselines_ok": len(baseline_ids),

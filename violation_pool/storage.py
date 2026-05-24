@@ -110,8 +110,10 @@ CREATE TABLE IF NOT EXISTS ifc_violation_labels (
 
 @contextmanager
 def _conn():
-    conn = sqlite3.connect(settings.db_path)
+    conn = sqlite3.connect(settings.db_path, timeout=30.0)
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")     # concurrent writers
+    conn.execute("PRAGMA busy_timeout = 30000")   # 30s bekle, hata atma
     conn.row_factory = sqlite3.Row
     try:
         yield conn
