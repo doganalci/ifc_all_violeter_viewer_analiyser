@@ -50,7 +50,7 @@ if root != current_root:
 with st.sidebar.expander("📁 Klasör seç (gez)"):
     picked = folder_browser(start=root, key="train_browser")
     if picked:
-        from app.state import set_dataset_root
+        from ml.app.state import set_dataset_root
         set_dataset_root(picked)
         st.rerun()
 
@@ -238,8 +238,8 @@ start = st.button("🚀 Eğitimi başlat", type="primary")
 if start:
     # In-place imports so torch is only required when actually training.
     try:
-        from train.loop import run_training
-        from train.metrics import EvalResult  # noqa: F401
+        from ml.train.loop import run_training
+        from ml.train.metrics import EvalResult  # noqa: F401
     except ImportError as e:
         st.error(f"PyTorch/PyG yüklü değil: {e}")
         st.stop()

@@ -139,8 +139,8 @@ except ImportError:
 
 
 def _build_model(cfg, in_dim, num_edge_types):
-    from model.gat import GATNodeClassifier
-    from model.hetero_gat import HeteroGATNodeClassifier
+    from ml.model.gat import GATNodeClassifier
+    from ml.model.hetero_gat import HeteroGATNodeClassifier
     if cfg.model == "hetero_gat":
         return HeteroGATNodeClassifier(
             in_dim=in_dim, hidden_dim=cfg.hidden_dim,

@@ -153,7 +153,7 @@ with ctrl_b:
         st.success(f"Baseline ile karşılaştırılıyor: `{partner_entry['id'][:8]}`")
     elif entry["kind"] == "baseline":
         # Allow opening any one of its violated children alongside.
-        from app.state import violated_children
+        from ml.app.state import violated_children
         kids = violated_children(root, entry["id"])
         if kids:
             kid_idx = st.selectbox(

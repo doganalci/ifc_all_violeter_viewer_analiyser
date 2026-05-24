@@ -55,8 +55,8 @@ def _list_runs(run_dir: Path) -> list[Path]:
 def _load_model(cfg: TrainConfig, in_dim: int, num_edge_types: int):
     # Lazy: avoid pulling torch on pages that don't need it.
     import torch
-    from model.gat import GATNodeClassifier
-    from model.hetero_gat import HeteroGATNodeClassifier
+    from ml.model.gat import GATNodeClassifier
+    from ml.model.hetero_gat import HeteroGATNodeClassifier
 
     if cfg.model == "hetero_gat":
         m = HeteroGATNodeClassifier(
