@@ -358,11 +358,18 @@ def inject_violations(
     out_id = str(uuid.uuid4())
     out_dir = settings.ifc_dir / "violated"
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Dosya adı baseline'dan türetilir → izlenebilir.
-    # Örn: synth_two_room_00018_violated_a1b2c3d4.ifc
+    # Dosya adı baseline'dan + sıra numarasından türetilir → izlenebilir.
+    # Örn: synth_two_room_00018_violated1, _violated2, ...
     _base_stem = Path(base.get("file_path", "")).stem or (base.get("name") or "baseline")
     _base_stem = "".join(c if c.isalnum() or c in "-_+" else "_" for c in _base_stem)
-    _stem = f"{_base_stem}_violated_{out_id[:8]}"
+    # Bu baseline için ilk boş _violatedN'i bul (paralelde nadir çakışmada
+    # uuid suffix'iyle güvenceye alınır).
+    _n = 1
+    while (out_dir / f"{_base_stem}_violated{_n}.ifc").exists():
+        _n += 1
+    _stem = f"{_base_stem}_violated{_n}"
+    if (out_dir / f"{_stem}.ifc").exists():   # paralel çakışma güvencesi
+        _stem = f"{_base_stem}_violated{_n}_{out_id[:6]}"
     out_ifc = out_dir / f"{_stem}.ifc"
     out_lab = out_dir / f"{_stem}.labels.json"
     out_meta = out_dir / f"{_stem}.meta.json"
