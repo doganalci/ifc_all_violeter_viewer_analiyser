@@ -247,8 +247,10 @@ if start:
     progress_slot = st.empty()
     metric_slot = st.empty()
     chart_slot = st.empty()
-    log_slot = st.expander("📜 Log", expanded=False)
+    # Açılabilir terminal — eğitim sırasındaki tüm stdout/stderr buraya yazılır.
+    log_slot = st.expander("🖥️ Terminal (canlı)", expanded=True)
     log_buffer: list[str] = []
+    log_show_lines = 400  # son N satırı göster (UI bunaltmasın)
 
     history_rows: list[dict] = []
 
@@ -299,20 +301,66 @@ if start:
             c2.caption("Bal_acc & MCC & Decoy FPR")
             c2.line_chart(df[["balanced_acc", "mcc", "decoy_fpr"]])
 
+    log_placeholder = log_slot.empty()
+
+    def _render_log() -> None:
+        text = "\n".join(log_buffer[-log_show_lines:])
+        log_placeholder.code(text or "(henüz çıktı yok)", language="text")
+
     def on_log(msg: str):
-        log_buffer.append(msg)
-        with log_slot:
-            st.code("\n".join(log_buffer[-200:]))
+        for line in str(msg).rstrip("\n").split("\n"):
+            log_buffer.append(line)
+        _render_log()
+
+    # stdout/stderr'i de yakala: torch_geometric / chromadb / PyG cache
+    # gibi paketler print ile yazar; sade `on_log` sadece loop.py'nin
+    # _log çağrılarını alır. Tee ile her ikisini de logla.
+    import io, sys as _sys
+
+    class _Tee(io.TextIOBase):
+        def __init__(self, original):
+            self._orig = original
+            self._buf = ""
+
+        def write(self, s):  # type: ignore[override]
+            if not s:
+                return 0
+            try:
+                self._orig.write(s)
+            except Exception:
+                pass
+            self._buf += s
+            if "\n" in self._buf:
+                lines = self._buf.split("\n")
+                self._buf = lines[-1]
+                for line in lines[:-1]:
+                    if line.strip():
+                        log_buffer.append(line)
+                _render_log()
+            return len(s)
+
+        def flush(self):
+            try:
+                self._orig.flush()
+            except Exception:
+                pass
+
+    _orig_out, _orig_err = _sys.stdout, _sys.stderr
 
     with st.spinner("Eğitim çalışıyor..."):
         try:
-            summary = run_training(
-                cfg,
-                on_setup=on_setup,
-                on_epoch_end=on_epoch,
-                on_log=on_log,
-                filter_ifc_ids=[e["id"] for e in violated_entries],
-            )
+            _sys.stdout = _Tee(_orig_out)
+            _sys.stderr = _Tee(_orig_err)
+            try:
+                summary = run_training(
+                    cfg,
+                    on_setup=on_setup,
+                    on_epoch_end=on_epoch,
+                    on_log=on_log,
+                    filter_ifc_ids=[e["id"] for e in violated_entries],
+                )
+            finally:
+                _sys.stdout, _sys.stderr = _orig_out, _orig_err
         except Exception as e:
             st.exception(e)
             st.stop()
