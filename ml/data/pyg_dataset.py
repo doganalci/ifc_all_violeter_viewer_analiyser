@@ -72,11 +72,15 @@ def sample_to_data(sample: Sample, *, mask_numeric: bool = False,
         decoy_mask=torch.from_numpy(decoy_mask),
     )
     # Non-tensor metadata; PyG stores arbitrary attrs on the Data object.
-    data.node_ids = node_ids
-    data.categories = categories
-    data.ifc_id = sample.ifc_id
-    data.baseline_id = sample.baseline_id
-    data.kind = sample.kind
+    # PyG yeni sürümünde collate.collate None vs eksik anahtarı ayırt
+    # ediyor; tüm Data objelerinde aynı tip & dolu olsun diye None'ları
+    # boş string'e zorla.
+    data.node_ids = list(node_ids)
+    data.categories = list(categories)
+    data.ifc_id = str(sample.ifc_id or "")
+    data.baseline_id = str(sample.baseline_id or "")
+    data.kind = str(sample.kind or "")
+    return data
     return data
 
 
