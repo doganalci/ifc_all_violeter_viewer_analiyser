@@ -84,6 +84,22 @@ with pv_cols[1]:
 # ---- Üretim ---------------------------------------------------------------
 st.subheader("3. Toplu üretim")
 
+# Dataset etiketi — her üretim ayrı bir 'paket' (klasör + DB tag)
+import datetime as _dt
+_default_tag = f"synth_{_dt.datetime.now().strftime('%Y%m%d_%H%M')}"
+tag_cols = st.columns([3, 2])
+with tag_cols[0]:
+    dataset_tag = st.text_input(
+        "📦 Dataset adı (etiket)",
+        value=_default_tag,
+        help="Bu üretim ayrı bir klasöre yazılır + DB'de bu etiketle "
+             "işaretlenir. Eğitim sayfasında dataset seçerken bu isim "
+             "görünür. Aynı isim verirsen üzerine ekler.",
+    )
+with tag_cols[1]:
+    safe_tag = "".join(c if c.isalnum() or c in "-_" else "_" for c in dataset_tag.strip()) or _default_tag
+    st.caption(f"🗂 Klasör: `baseline/{safe_tag}/`")
+
 gen_cols = st.columns([2, 1, 1, 2])
 with gen_cols[0]:
     n = st.number_input("Üretilecek IFC sayısı", 1, 1000, 50, 1)
@@ -94,7 +110,7 @@ with gen_cols[2]:
                                help="Baseline olarak SQLite'a yaz")
 with gen_cols[3]:
     out_dir = st.text_input("Çıkış klasörü",
-                              value=str(ifc_models_dir() / "baseline"))
+                              value=str(ifc_models_dir() / "baseline" / safe_tag))
 
 if st.button("🏗️ Üret", type="primary", use_container_width=True):
     progress = st.progress(0.0, text="başlatılıyor...")
@@ -114,6 +130,7 @@ if st.button("🏗️ Üret", type="primary", use_container_width=True):
             seed_start=int(seed_start),
             params=params,
             register_in_db=register_db,
+            dataset_tag=safe_tag,
             progress_cb=_cb,
         )
     except Exception as e:

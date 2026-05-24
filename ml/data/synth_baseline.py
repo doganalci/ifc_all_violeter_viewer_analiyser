@@ -215,8 +215,14 @@ def generate_batch(n: int, out_dir: str | Path,
                    seed_start: int = 0,
                    params: SynthParams | None = None,
                    register_in_db: bool = True,
+                   dataset_tag: str | None = None,
                    progress_cb=None) -> list[dict]:
-    """N adet baseline üret. İsteğe bağlı olarak DB'ye baseline olarak kaydet."""
+    """N adet baseline üret. İsteğe bağlı olarak DB'ye baseline olarak kaydet.
+
+    Args:
+        dataset_tag: bu üretimin etiketi (örn 'synth_v1'). Eğitim sayfasında
+            multi-select ile filtreleme bu etiket üzerinden yapılır.
+    """
     out_dir = Path(out_dir).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict] = []
@@ -224,15 +230,16 @@ def generate_batch(n: int, out_dir: str | Path,
         seed = seed_start + i
         ifc_path = out_dir / f"synth_two_room_{seed:05d}.ifc"
         info = generate(seed, ifc_path, params=params)
+        info["dataset_tag"] = dataset_tag
         if register_in_db:
-            _register(info)
+            _register(info, dataset_tag=dataset_tag)
         results.append(info)
         if progress_cb:
             progress_cb(i + 1, n, info)
     return results
 
 
-def _register(info: dict) -> None:
+def _register(info: dict, dataset_tag: str | None = None) -> None:
     """codex1 storage'ına baseline olarak yaz."""
     try:
         from violation_pool import storage
@@ -251,6 +258,7 @@ def _register(info: dict) -> None:
             prompt="synthetic 2-room compliant",
             status="ok",
             error=None,
+            dataset_tag=dataset_tag,
         )
     except Exception as e:
         print(f"[synth] DB kaydı atlandı: {e}")

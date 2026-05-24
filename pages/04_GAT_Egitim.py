@@ -62,41 +62,65 @@ if not (Path(root).expanduser() / "violation_pool.sqlite").exists():
     st.stop()
 
 # ---- Dataset filtering ------------------------------------------------------
-st.subheader("1. Dataset & etiket seçimi")
+st.subheader("1. Dataset seçimi")
 
+# A) Dataset tag bazlı filtre (yeni: Sentetik Üretim ile gelen paketler)
+from violation_pool import storage as _storage
+all_tags = _storage.list_dataset_tags()  # [{tag, baseline, violated, total}, ...]
+
+if all_tags:
+    st.caption("**📦 Dataset etiketleri** — Sentetik Üretim ile veya pipeline'ın "
+                "verdiği etiketlere göre paket seçimi. Çoklu seçilebilir.")
+    tags_df = pd.DataFrame(all_tags)[["tag", "baseline", "violated", "total"]]
+    tag_cols = st.columns([3, 2])
+    with tag_cols[0]:
+        st.dataframe(tags_df, hide_index=True, use_container_width=True)
+    with tag_cols[1]:
+        chosen_tags = st.multiselect(
+            "Dataset paket(ler)i",
+            options=[t["tag"] for t in all_tags],
+            default=[t["tag"] for t in all_tags],
+            help="Hepsini seçili bırakırsan tüm verilerle eğitir.",
+        )
+        if not chosen_tags:
+            st.error("En az bir dataset seç.")
+            st.stop()
+else:
+    chosen_tags = None  # tag yoksa filtre uygulama
+    st.caption("(Henüz dataset etiketi yok — tüm violated IFC'ler kullanılacak.)")
+
+# B) Pool filtresi — codex1 pipeline'da etiketleme yöntemine göre alt-filtre
 pools = reader_for(root).list_pool_runs()
+chosen_pools: list[str] | None = None
+if pools:
+    with st.expander("🔧 Pool_run filtresi (opsiyonel, codex1 ihlal havuzu)"):
+        pool_df = pd.DataFrame(pools)[["id", "name", "n_violated", "method",
+                                        "llm_model", "created_at"]]
+        pool_df = pool_df.rename(columns={"id": "pool_id", "n_violated": "#IFC"})
+        st.dataframe(pool_df, hide_index=True, use_container_width=True)
+        chosen_pools = st.multiselect(
+            "Kullanılacak pool_run(lar) — boş = hepsi",
+            options=[p["id"] for p in pools],
+            default=[p["id"] for p in pools],
+            format_func=lambda i: f"{next(p['name'] for p in pools if p['id']==i)} ({i[:8]})",
+        )
+        if not chosen_pools:
+            chosen_pools = None
 
-if not pools:
-    st.warning("Bu dataset'te kaydedilmiş ihlal havuzu (pool_run) yok.")
-    st.stop()
-
-pool_df = pd.DataFrame(pools)[["id", "name", "n_violated", "method", "llm_model", "created_at"]]
-pool_df = pool_df.rename(columns={"id": "pool_id", "n_violated": "#IFC"})
-
-cols = st.columns([3, 2])
-with cols[0]:
-    st.caption("Mevcut ihlal havuzları (codex1'de üretilen label set'leri):")
-    st.dataframe(pool_df, hide_index=True, use_container_width=True)
-with cols[1]:
-    chosen_pools = st.multiselect(
-        "Kullanılacak pool_run(lar)",
-        options=[p["id"] for p in pools],
-        default=[p["id"] for p in pools],
-        format_func=lambda i: f"{next(p['name'] for p in pools if p['id']==i)} ({i[:8]})",
-    )
-    if not chosen_pools:
-        st.error("En az bir pool seç.")
-        st.stop()
-
-# Collect violated IFC entries belonging to chosen pools.
+# Filtreleri uygula
 all_violated = list_entries(root, kind="violated")
-in_pool = [e for e in all_violated if e.get("pool_run_id") in chosen_pools]
-with_graph = [e for e in in_pool if e.get("graph_ok")]
+filtered = all_violated
+if chosen_tags is not None:
+    allowed = set(_storage.ifc_ids_for_tags(chosen_tags, kind="violated"))
+    filtered = [e for e in filtered if e["id"] in allowed]
+if chosen_pools is not None:
+    filtered = [e for e in filtered if e.get("pool_run_id") in chosen_pools]
+with_graph = [e for e in filtered if e.get("graph_ok")]
 violated_entries = with_graph
 
 diag = st.columns(3)
 diag[0].metric("Toplam violated", len(all_violated))
-diag[1].metric("Seçili pool'da", len(in_pool))
+diag[1].metric("Filtre sonrası", len(filtered))
 diag[2].metric("Graph'lı (eğitilebilir)", len(violated_entries))
 
 if not violated_entries:
@@ -106,16 +130,16 @@ if not violated_entries:
             "Bu dataset'te hiç violated IFC yok. codex1'in pipeline'ında "
             "**'Pool'dan violated üret'** adımını çalıştırman gerek."
         )
-    elif not in_pool:
+    elif not filtered:
         st.error(
-            "Seçili pool(lara) bağlı violated IFC yok. Üstteki tabloda "
-            "`#IFC` sütunundaki sayılara bak; >0 olan bir pool seç."
+            "Seçili dataset/pool filtreleri sonucu hiç violated IFC kalmadı. "
+            "Üstteki dataset paketlerinden farklı bir kombinasyon seç."
         )
     else:
-        # In-pool var ama hiçbirinin graph'ı yok.
-        without_graph = [e for e in in_pool if not e.get("graph_ok")]
+        # filtered var ama hiçbirinin graph'ı yok.
+        without_graph = [e for e in filtered if not e.get("graph_ok")]
         st.error(
-            f"Seçili pool'da {len(in_pool)} violated IFC var ama hiçbirinin "
+            f"Seçili filtrede {len(filtered)} violated IFC var ama hiçbirinin "
             f"`graph.json` dosyası yok. codex1'de IFC üretildikten sonra "
             f"graph generation adımının çalıştığından emin ol. "
             f"İlk birkaç eksik: {[e['id'][:8] for e in without_graph[:3]]}"

@@ -27,14 +27,21 @@ def main() -> None:
                    help="DB'ye baseline olarak yazma (sadece dosya üret)")
     p.add_argument("--no-windows", action="store_true",
                    help="Pencere ekleme")
+    p.add_argument("--tag", default=None,
+                   help="Dataset etiketi (default: synth_<timestamp>). "
+                        "Eğitimde dataset seçerken kullanılır.")
     a = p.parse_args()
 
-    out = Path(a.out) if a.out else (ifc_models_dir() / "baseline")
+    import datetime as _dt
+    tag = a.tag or f"synth_{_dt.datetime.now().strftime('%Y%m%d_%H%M')}"
+    safe_tag = "".join(c if c.isalnum() or c in "-_" else "_" for c in tag.strip())
+    out = Path(a.out) if a.out else (ifc_models_dir() / "baseline" / safe_tag)
     params = SynthParams(add_windows=not a.no_windows)
 
     def _cb(i, n, info):
         print(f"  [{i}/{n}] {Path(info['ifc_path']).name}")
 
+    print(f"📦 Dataset etiketi: {safe_tag}")
     print(f"📂 Hedef: {out}")
     print(f"🔢 Üretilecek: {a.n}  (seed başlangıç: {a.seed_start})")
     print()
@@ -43,12 +50,13 @@ def main() -> None:
         seed_start=a.seed_start,
         params=params,
         register_in_db=not a.no_db,
+        dataset_tag=safe_tag,
         progress_cb=_cb,
     )
     print()
     print(f"✅ {len(results)} baseline üretildi: {out}")
     if not a.no_db:
-        print("   DB'ye baseline olarak kaydedildi (kind=baseline).")
+        print(f"   DB'ye baseline olarak kaydedildi (kind=baseline, tag={safe_tag}).")
 
 
 if __name__ == "__main__":

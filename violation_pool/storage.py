@@ -134,6 +134,8 @@ def init_db() -> None:
         icols = {r["name"] for r in c.execute("PRAGMA table_info(ifc_models)").fetchall()}
         if icols and "graph_path" not in icols:
             c.execute("ALTER TABLE ifc_models ADD COLUMN graph_path TEXT")
+        if icols and "dataset_tag" not in icols:
+            c.execute("ALTER TABLE ifc_models ADD COLUMN dataset_tag TEXT")
         lcols = {r["name"] for r in c.execute("PRAGMA table_info(ifc_violation_labels)").fetchall()}
         if lcols and "is_decoy" not in lcols:
             c.execute("ALTER TABLE ifc_violation_labels ADD COLUMN is_decoy INTEGER NOT NULL DEFAULT 0")
@@ -312,19 +314,20 @@ def create_ifc_model(
     error: str | None = None,
     graph_path: str | None = None,
     id: str | None = None,
+    dataset_tag: str | None = None,
 ) -> str:
     mid = id or str(uuid.uuid4())
     with _conn() as c:
         c.execute(
             """INSERT INTO ifc_models(id, kind, name, parent_id, llm_model, prompt,
                pool_run_id, params_json, file_path, meta_path, labels_path,
-               graph_path, status, error, created_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               graph_path, status, error, created_at, dataset_tag)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 mid, kind, name, parent_id, llm_model, prompt, pool_run_id,
                 json.dumps(params or {}, ensure_ascii=False),
                 file_path, meta_path, labels_path, graph_path,
-                status, error, now(),
+                status, error, now(), dataset_tag,
             ),
         )
     return mid
@@ -333,6 +336,69 @@ def create_ifc_model(
 def set_ifc_graph_path(ifc_id: str, graph_path: str) -> None:
     with _conn() as c:
         c.execute("UPDATE ifc_models SET graph_path=? WHERE id=?", (graph_path, ifc_id))
+
+
+def list_dataset_tags() -> list[dict]:
+    """DB'deki dataset_tag'leri ve her birinin IFC sayısını döndür.
+
+    Bir violated IFC'nin tag'ı: kendi dataset_tag'ı varsa onu kullan,
+    yoksa parent baseline'ın dataset_tag'ı (varsa) kullan.
+    """
+    with _conn() as c:
+        rows = c.execute(
+            """
+            SELECT
+              COALESCE(child.dataset_tag, parent.dataset_tag, '(etiketsiz)') AS tag,
+              child.kind AS kind,
+              COUNT(*) AS n
+            FROM ifc_models child
+            LEFT JOIN ifc_models parent ON child.parent_id = parent.id
+            GROUP BY tag, child.kind
+            ORDER BY tag, child.kind
+            """
+        ).fetchall()
+    out: dict[str, dict] = {}
+    for r in rows:
+        out.setdefault(r["tag"], {"tag": r["tag"], "baseline": 0, "violated": 0,
+                                  "imported": 0, "total": 0})
+        out[r["tag"]][r["kind"]] = int(r["n"])
+        out[r["tag"]]["total"] += int(r["n"])
+    return list(out.values())
+
+
+def ifc_ids_for_tags(tags: list[str] | None, kind: str | None = None) -> list[str]:
+    """tags listesindeki dataset'lere ait IFC id'lerini döndür.
+
+    tags None veya boş → tüm dataset'ler (filtre yok).
+    kind verilirse o kind ile filtreler ('baseline' | 'violated' | 'imported').
+    """
+    sql = (
+        "SELECT child.id FROM ifc_models child "
+        "LEFT JOIN ifc_models parent ON child.parent_id = parent.id WHERE 1=1"
+    )
+    args: list = []
+    if tags:
+        # '(etiketsiz)' özel: NULL'a düşen kayıtlar
+        if "(etiketsiz)" in tags:
+            tags_no_special = [t for t in tags if t != "(etiketsiz)"]
+            if tags_no_special:
+                placeholders = ",".join("?" * len(tags_no_special))
+                sql += (f" AND ((child.dataset_tag IN ({placeholders}) OR "
+                        f"parent.dataset_tag IN ({placeholders})) OR "
+                        f"(child.dataset_tag IS NULL AND parent.dataset_tag IS NULL))")
+                args += list(tags_no_special) + list(tags_no_special)
+            else:
+                sql += " AND (child.dataset_tag IS NULL AND parent.dataset_tag IS NULL)"
+        else:
+            placeholders = ",".join("?" * len(tags))
+            sql += (f" AND (child.dataset_tag IN ({placeholders}) OR "
+                    f"parent.dataset_tag IN ({placeholders}))")
+            args += list(tags) + list(tags)
+    if kind:
+        sql += " AND child.kind = ?"
+        args.append(kind)
+    with _conn() as c:
+        return [r["id"] for r in c.execute(sql, args).fetchall()]
 
 
 def _resolve_paths(row: dict) -> dict:
