@@ -24,15 +24,14 @@ import streamlit as st
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
-sys.path.insert(0, str(_ROOT / "ml"))
 
-from app.state import (
+from ml.app.state import (
     folder_browser, get_dataset_root, list_entries, reader_for, set_dataset_root,
 )
-from data.pyg_dataset import sample_to_data
-from data.graph_loader import load_sample
-from train.config import TrainConfig
-from train.metrics import evaluate_predictions
+from ml.data.pyg_dataset import sample_to_data
+from ml.data.graph_loader import load_sample
+from ml.train.config import TrainConfig
+from ml.train.metrics import evaluate_predictions
 
 
 # ---- Sidebar (lighter — model picker on the page itself) --------------------

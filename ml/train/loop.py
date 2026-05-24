@@ -13,9 +13,9 @@ import torch
 import torch.nn as nn
 from torch_geometric.loader import DataLoader
 
-from data import IFCViolationDataset, split_by_baseline
-from data.splits import SplitIndices
-from model import GATNodeClassifier, HeteroGATNodeClassifier
+from ml.data import IFCViolationDataset, split_by_baseline
+from ml.data.splits import SplitIndices
+from ml.model import GATNodeClassifier, HeteroGATNodeClassifier
 
 from .config import TrainConfig
 from .metrics import EvalResult, evaluate_predictions

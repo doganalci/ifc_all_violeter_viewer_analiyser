@@ -25,13 +25,12 @@ import streamlit as st
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
-sys.path.insert(0, str(_ROOT / "ml"))
 
-from app.state import (
+from ml.app.state import (
     folder_browser, get_dataset_root, list_entries, reader_for, set_dataset_root,
 )
-from data.splits import SplitIndices, split_by_baseline
-from train.config import TrainConfig
+from ml.data.splits import SplitIndices, split_by_baseline
+from ml.train.config import TrainConfig
 
 
 st.set_page_config(page_title="GAT Eğitim", layout="wide", page_icon="🏋️")

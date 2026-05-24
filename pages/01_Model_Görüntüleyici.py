@@ -27,14 +27,13 @@ import streamlit as st
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
-sys.path.insert(0, str(_ROOT / "ml"))
 
-from app.state import (
+from ml.app.state import (
     entry_by_id, get_dataset_root, get_selected_node, labels_summary,
     load_sample_for, set_selected_node, sidebar_config,
 )
-from viz.graph_view import interactive_agraph
-from viz.ifc3d import build_figure, extract_meshes
+from ml.viz.graph_view import interactive_agraph
+from ml.viz.ifc3d import build_figure, extract_meshes
 
 
 # ---- Cached IFC tessellation ------------------------------------------------

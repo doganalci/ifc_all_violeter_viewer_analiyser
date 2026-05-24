@@ -25,14 +25,13 @@ import numpy as np
 import torch
 
 _ML = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_ML))
 sys.path.insert(0, str(_ML.parent))
 
 from paths import data_home
-from data import IFCViolationDataset, split_by_baseline
-from model import GATNodeClassifier, HeteroGATNodeClassifier
-from train.config import TrainConfig
-from train.metrics import evaluate_predictions
+from ml.data import IFCViolationDataset, split_by_baseline
+from ml.model import GATNodeClassifier, HeteroGATNodeClassifier
+from ml.train.config import TrainConfig
+from ml.train.metrics import evaluate_predictions
 
 
 def _build_model(cfg: TrainConfig, in_dim: int, num_edge_types: int):

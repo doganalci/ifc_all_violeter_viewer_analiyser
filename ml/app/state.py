@@ -19,11 +19,10 @@ import sys
 # Allow `from data import ...` when this module runs from `ml/`.
 _ML_ROOT = Path(__file__).resolve().parents[1]
 _PROG_ROOT = _ML_ROOT.parent
-sys.path.insert(0, str(_ML_ROOT))
 sys.path.insert(0, str(_PROG_ROOT))
 
-from data.graph_loader import load_sample  # ml/data/graph_loader.py
-from data.sqlite_reader import DatasetReader  # ml/data/sqlite_reader.py
+from ml.data.graph_loader import load_sample  # ml/data/graph_loader.py
+from ml.data.sqlite_reader import DatasetReader  # ml/data/sqlite_reader.py
 from paths import data_home  # konsolide veri klasörü
 
 

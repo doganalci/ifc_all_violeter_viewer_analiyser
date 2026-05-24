@@ -23,14 +23,13 @@ import streamlit as st
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
-sys.path.insert(0, str(_ROOT / "ml"))
 
-from app.state import load_sample_for, sidebar_config
-from data.pyg_dataset import sample_to_data
-from train.config import TrainConfig
-from train.metrics import evaluate_predictions
-from viz.graph_view import static_plotly
-from viz.ifc3d import build_figure, extract_meshes
+from ml.app.state import load_sample_for, sidebar_config
+from ml.data.pyg_dataset import sample_to_data
+from ml.train.config import TrainConfig
+from ml.train.metrics import evaluate_predictions
+from ml.viz.graph_view import static_plotly
+from ml.viz.ifc3d import build_figure, extract_meshes
 
 
 @st.cache_data(show_spinner="IFC tessellate ediliyor...")

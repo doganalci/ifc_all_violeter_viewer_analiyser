@@ -42,18 +42,17 @@ import torch
 from torch_geometric.loader import DataLoader
 
 _ML = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_ML))
 sys.path.insert(0, str(_ML.parent))
 
 from paths import data_home
-from data import IFCViolationDataset, split_by_baseline
-from data.graph_loader import load_sample, NODE_TYPES
-from data.features import _NUMERIC_ATTRS, FEATURE_DIM, build_node_features
-from data.pyg_dataset import sample_to_data
-from data.sqlite_reader import DatasetReader
-from model import GATNodeClassifier, HeteroGATNodeClassifier
-from train.config import TrainConfig
-from train.metrics import evaluate_predictions
+from ml.data import IFCViolationDataset, split_by_baseline
+from ml.data.graph_loader import load_sample, NODE_TYPES
+from ml.data.features import _NUMERIC_ATTRS, FEATURE_DIM, build_node_features
+from ml.data.pyg_dataset import sample_to_data
+from ml.data.sqlite_reader import DatasetReader
+from ml.model import GATNodeClassifier, HeteroGATNodeClassifier
+from ml.train.config import TrainConfig
+from ml.train.metrics import evaluate_predictions
 
 
 # ---------------------------------------------------------------------------

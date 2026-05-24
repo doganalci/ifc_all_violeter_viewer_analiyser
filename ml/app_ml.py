@@ -12,7 +12,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from app.state import sidebar_config, labels_summary
+from ml.app.state import sidebar_config, labels_summary
 
 
 st.set_page_config(
