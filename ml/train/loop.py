@@ -65,6 +65,7 @@ def _eval(model: nn.Module, loader: DataLoader, device: str, threshold: float) -
     model.eval()
     y_all: list[np.ndarray] = []
     p_all: list[np.ndarray] = []
+    s_all: list[np.ndarray] = []          # raw sigmoid skorları — AUC için
     d_all: list[np.ndarray] = []
     c_all: list[str | None] = []
     with torch.no_grad():
@@ -75,9 +76,8 @@ def _eval(model: nn.Module, loader: DataLoader, device: str, threshold: float) -
             preds = (probs >= threshold).astype(np.int64)
             y_all.append(batch.y.cpu().numpy())
             p_all.append(preds)
+            s_all.append(probs)
             d_all.append(batch.decoy_mask.cpu().numpy())
-            # Categories are stored as a python list per Data; PyG batches
-            # them into a list-of-lists. Flatten in order.
             for cats in batch.categories:
                 c_all.extend(cats)
     return evaluate_predictions(
@@ -85,6 +85,7 @@ def _eval(model: nn.Module, loader: DataLoader, device: str, threshold: float) -
         np.concatenate(p_all),
         np.concatenate(d_all),
         categories=c_all,
+        y_score=np.concatenate(s_all),
     )
 
 
@@ -225,7 +226,9 @@ def run_training(
         _log(
             f"epoch {epoch:03d}  loss={train_loss:.4f}  "
             f"val_f1={val_res.f1:.3f}  P={val_res.precision:.3f}  "
-            f"R={val_res.recall:.3f}  decoy_fpr={val_res.decoy_fpr:.3f}  "
+            f"R={val_res.recall:.3f}  bal_acc={val_res.balanced_accuracy:.3f}  "
+            f"MCC={val_res.mcc:+.2f}  AUC={val_res.auc_roc:.3f}  "
+            f"decoy_fpr={val_res.decoy_fpr:.3f}  "
             f"[{dt:.1f}s]"
         )
         history.append(
@@ -274,5 +277,13 @@ def run_training(
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     _log(f"[train] done. best val F1={best_f1:.3f} @ epoch {best_epoch}")
     if test_res is not None:
-        _log(f"[train] test: f1={test_res['f1']:.3f}  decoy_fpr={test_res['decoy_fpr']:.3f}")
+        _log(f"[train] test: f1={test_res['f1']:.3f}  "
+             f"P={test_res['precision']:.3f}  R={test_res['recall']:.3f}  "
+             f"bal_acc={test_res['balanced_accuracy']:.3f}  "
+             f"MCC={test_res['mcc']:+.2f}  AUC={test_res['auc_roc']:.3f}  "
+             f"decoy_fpr={test_res['decoy_fpr']:.3f}")
+        _log("[train] confusion matrix:")
+        cm = test_res["confusion"]
+        _log(f"  TN={cm['tn']:>6d}  FP={cm['fp']:>6d}")
+        _log(f"  FN={cm['fn']:>6d}  TP={cm['tp']:>6d}")
     return summary

@@ -183,7 +183,11 @@ with torch.no_grad():
         preds = (probs >= threshold).astype(np.int64)
         y = data.y.cpu().numpy()
         decoy = data.decoy_mask.cpu().numpy()
-        res = evaluate_predictions(y, preds, decoy, categories=data.categories)
+        res = evaluate_predictions(
+            y, preds, decoy,
+            categories=data.categories,
+            y_score=probs,
+        )
         rows.append({
             "ifc_id": ent["id"][:8],
             "name": ent["name"],
@@ -214,6 +218,14 @@ with torch.no_grad():
 progress.empty()
 
 # ---- Aggregate -------------------------------------------------------------
+s_all_concat = []
+for r in rows:
+    pass  # skor toplamı aşağıda her IFC için ayrıca tutuluyor
+# y_score aggregate için per-IFC döngüsünde toplayalım
+# (zaten preds threshold ile alındı; AUC için raw probs lazım)
+# Bu yüzden toplu evaluate'te y_score=None — AUC olmaz.
+# Bunun yerine her IFC'de ayrı ayrı AUC hesaplandı (res.auc_roc satır altında).
+
 agg = evaluate_predictions(
     np.concatenate(y_all),
     np.concatenate(p_all),
@@ -222,24 +234,58 @@ agg = evaluate_predictions(
 )
 
 st.subheader("Toplu sonuç")
-a, b, c, d = st.columns(4)
-a.metric("F1", f"{agg.f1:.3f}")
-b.metric("Precision", f"{agg.precision:.3f}")
-c.metric("Recall", f"{agg.recall:.3f}")
-d.metric("Decoy FPR", f"{agg.decoy_fpr:.3f}",
-         help="Decoy node'ların kaçını yanlışlıkla ihlal saydı.")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("F1", f"{agg.f1:.3f}")
+c2.metric("Precision", f"{agg.precision:.3f}")
+c3.metric("Recall", f"{agg.recall:.3f}")
+c4.metric("Decoy FPR", f"{agg.decoy_fpr:.3f}",
+          help="Decoy node'ların kaçını yanlışlıkla ihlal saydı.")
+c5, c6, c7, c8 = st.columns(4)
+c5.metric("Balanced Acc", f"{agg.balanced_accuracy:.3f}",
+          help="(TPR + TNR) / 2 — sınıf dengesizliğine sağlam.")
+c6.metric("MCC", f"{agg.mcc:+.3f}",
+          help="Matthews correlation. -1..+1. 0 = rastgele.")
+c7.metric("Accuracy", f"{agg.accuracy:.3f}")
+c8.metric("Pozitif oran",
+          f"{(agg.n_positive / max(agg.n_positive + agg.tn + agg.fp, 1)):.1%}",
+          help="Test setindeki gerçek pozitif oranı (baseline).")
 st.caption(
     f"Pozitif örnek: {agg.n_positive} · Tahmin pozitif: {agg.n_predicted_positive} "
     f"· Decoy: {agg.n_decoys}"
 )
 
-if agg.per_category_recall:
-    st.subheader("Kategori bazında recall")
-    cat_df = pd.DataFrame(
-        sorted(agg.per_category_recall.items(), key=lambda kv: kv[1]),
-        columns=["category", "recall"],
+# ---- Confusion Matrix -----------------------------------------------------
+st.subheader("Confusion Matrix")
+cm_df = pd.DataFrame(
+    [[agg.tn, agg.fp], [agg.fn, agg.tp]],
+    index=["Gerçek: değil", "Gerçek: ihlal"],
+    columns=["Tahmin: değil", "Tahmin: ihlal"],
+)
+cm_col1, cm_col2 = st.columns([1, 2])
+with cm_col1:
+    st.dataframe(cm_df, use_container_width=True)
+with cm_col2:
+    st.caption(
+        f"**TP={agg.tp}**: doğru bilinen ihlaller  · "
+        f"**FN={agg.fn}**: kaçırılan gerçek ihlaller (recall'u düşürür)  · "
+        f"**FP={agg.fp}**: yanlış alarm (precision'ı düşürür)  · "
+        f"**TN={agg.tn}**: doğru reddedilen normaller"
     )
-    st.bar_chart(cat_df.set_index("category"))
+
+if agg.per_category_recall:
+    st.subheader("Kategori bazında P / R / F1")
+    cat_rows = []
+    for c in sorted(set(agg.per_category_recall) | set(agg.per_category_precision)):
+        cat_rows.append({
+            "kategori": c,
+            "precision": agg.per_category_precision.get(c, 0.0),
+            "recall": agg.per_category_recall.get(c, 0.0),
+            "f1": agg.per_category_f1.get(c, 0.0),
+            "support": agg.per_category_support.get(c, 0),
+        })
+    cat_df = pd.DataFrame(cat_rows).sort_values("f1")
+    st.dataframe(cat_df, hide_index=True, use_container_width=True)
+    st.bar_chart(cat_df.set_index("kategori")[["precision", "recall", "f1"]])
 
 # ---- Per-IFC table ---------------------------------------------------------
 st.subheader("Her IFC için sonuç")
