@@ -111,8 +111,61 @@ class IFCViolationDataset(InMemoryDataset):
         self._mask_numeric = mask_numeric_features
         self._mask_psets = mask_pset_features
         self._mask_type = mask_type_features
+
+        # Cache freshness: DB'deki en yeni IFC, cache file'dan yeni mi?
+        # Yeni IFC'ler eklendiyse cache stale — sil, baştan işle.
+        self._invalidate_if_stale(Path(root))
+
         super().__init__(str(Path(root)), transform=transform)
         self.load(self.processed_paths[0])
+
+    def _invalidate_if_stale(self, root: Path) -> None:
+        """DB'deki en son IFC kaydı cache dosyasından yeniyse cache'i sil."""
+        # Cache yolu (processed_file_names property henüz hazır — burada hesapla)
+        suffix = ""
+        if self._include_baselines:
+            suffix += "_with_base"
+        if self._use_rule_oracle:
+            suffix += "_oracle"
+        if self._mask_numeric:
+            suffix += "_nonum"
+        if self._mask_psets:
+            suffix += "_nopset"
+        if self._mask_type:
+            suffix += "_notype"
+        cache_file = root / "processed" / f"ifc_violation{suffix}.pt"
+        if not cache_file.exists():
+            return
+        try:
+            cache_mtime = cache_file.stat().st_mtime
+        except OSError:
+            return
+        # DB'den en yeni IFC kaydının created_at'ini al
+        try:
+            import sqlite3
+            db_path = self._dataset_root / "violation_pool.sqlite"
+            if not db_path.exists():
+                return
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            r = conn.execute(
+                "SELECT MAX(created_at) AS m FROM ifc_models"
+            ).fetchone()
+            conn.close()
+            if not r or not r["m"]:
+                return
+            from datetime import datetime
+            try:
+                # SQLite created_at ISO formatında
+                db_latest = datetime.fromisoformat(r["m"].replace("Z", "+00:00")).timestamp()
+            except Exception:
+                return
+            if db_latest > cache_mtime + 1:   # 1s tolerans
+                print(f"[cache] stale: DB en yeni IFC ({r['m']}) > cache "
+                      f"({datetime.fromtimestamp(cache_mtime)}). Siliniyor.")
+                cache_file.unlink()
+        except Exception as e:
+            print(f"[cache] freshness kontrol atlandı: {e}")
 
     @property
     def raw_file_names(self) -> list[str]:

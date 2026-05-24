@@ -154,9 +154,21 @@ def run_training(
             _log("[train] cache yok — yeni oluşturuluyor")
     if filter_ifc_ids is not None:
         allow = set(filter_ifc_ids)
+        cache_ids = {ds_full[i].ifc_id for i in range(len(ds_full))}
         keep = [i for i in range(len(ds_full)) if ds_full[i].ifc_id in allow]
         if not keep:
-            raise RuntimeError("Filtre hiçbir IFC eşleştirmedi.")
+            missing = sorted(allow - cache_ids)[:5]
+            raise RuntimeError(
+                f"Filtre hiçbir IFC eşleştirmedi.\n"
+                f"  Cache'teki IFC sayısı: {len(cache_ids)}\n"
+                f"  Filtrede istenen: {len(allow)}\n"
+                f"  Cache'te BULUNMAYAN ilk birkaç ID: "
+                f"{[m[:8] for m in missing]}\n"
+                f"  → ÇOĞU DURUMDA CACHE BAYAT. Çözüm: GAT Eğitim sayfasında "
+                f"'🗑 Cache yönetimi' expander'ından 'Tüm cache'i sil' butonuna "
+                f"bas, sonra tekrar başlat. Cache otomatik yeniden işlenecek "
+                f"(yeni paketin IFC'leri dahil)."
+            )
         ds = ds_full[keep]
     else:
         ds = ds_full
