@@ -56,8 +56,21 @@ class DatasetReader:
         self.close()
 
     def _resolve(self, p: str | None) -> Path | None:
+        """DB'deki bir yol değerini gerçek bir dosyaya çöz.
+
+        Önce projedeki merkezi `resolve_stored_path` ile dener (eski
+        mutlak yollar, dosya-adı-eşleşmesi vs. hepsini hallediyor); o
+        bulamazsa dataset root altında görece çözüm dener.
+        """
         if not p:
             return None
+        try:
+            from paths import resolve_stored_path
+            r = resolve_stored_path(p)
+            if r is not None:
+                return r
+        except Exception:
+            pass
         path = Path(p)
         if not path.is_absolute():
             path = self.root / path
