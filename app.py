@@ -1042,9 +1042,14 @@ with top_ifc:
                             ok_n += 1
                             results.append({"ok": True, "summary": s,
                                             "id": r["out"]["ifc_model_id"]})
+                            _applied = s.get("applied", 0)
+                            _mark = "✓" if _applied > 0 else "⚠️"
+                            _reason = ""
+                            if _applied == 0 and s.get("skip_sample_reasons"):
+                                _reason = f"  | SKIP: {s['skip_sample_reasons'][0][:60]}"
                             logs.append(
-                                f"  ✓ [{done+1}/{total}] {baseline_m['name']} v{vi+1} "
-                                f"seed={seed} → applied={s['applied']}/req={s['requested']}"
+                                f"  {_mark} [{done+1}/{total}] {baseline_m['name']} v{vi+1} "
+                                f"seed={seed} → applied={_applied}/req={s['requested']}{_reason}"
                             )
                         else:
                             bad_n += 1
@@ -1067,6 +1072,21 @@ with top_ifc:
                         )
                         log_slot.code("\n".join(logs[-25:]))
                 bar.empty()
+                # Uygulanan ihlal var mı? applied=0 olanları uyar
+                applied_zero = sum(1 for r in results if r["ok"]
+                                   and r["summary"].get("applied", 0) == 0)
+                if applied_zero > 0:
+                    sample = next((r["summary"].get("skip_sample_reasons")
+                                   for r in results if r["ok"]
+                                   and r["summary"].get("applied", 0) == 0
+                                   and r["summary"].get("skip_sample_reasons")), None)
+                    st.error(
+                        f"⚠️ {applied_zero}/{ok_n} IFC'de **hiç ihlal uygulanmadı** "
+                        f"(applied=0, status=invalid → eğitimde görünmez). "
+                        + (f"Örnek sebep: `{sample[0]}`" if sample else "")
+                        + "\n\nGenellikle: **API key geçersiz/revoke** veya rate-limit. "
+                        "OpenAI key'ini kontrol et (data/.env)."
+                    )
                 st.success(
                     f"🎉 Toplu enjeksiyon bitti. "
                     f"**{ok_n}** başarılı, {bad_n} hata, "

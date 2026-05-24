@@ -358,9 +358,14 @@ def inject_violations(
     out_id = str(uuid.uuid4())
     out_dir = settings.ifc_dir / "violated"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_ifc = out_dir / f"{out_id}.ifc"
-    out_lab = out_dir / f"{out_id}.labels.json"
-    out_meta = out_dir / f"{out_id}.meta.json"
+    # Dosya adı baseline'dan türetilir → izlenebilir.
+    # Örn: synth_two_room_00018_violated_a1b2c3d4.ifc
+    _base_stem = Path(base.get("file_path", "")).stem or (base.get("name") or "baseline")
+    _base_stem = "".join(c if c.isalnum() or c in "-_+" else "_" for c in _base_stem)
+    _stem = f"{_base_stem}_violated_{out_id[:8]}"
+    out_ifc = out_dir / f"{_stem}.ifc"
+    out_lab = out_dir / f"{_stem}.labels.json"
+    out_meta = out_dir / f"{_stem}.meta.json"
     inject_meta_ifc_id = out_id
 
     target = len(violations)
@@ -511,6 +516,11 @@ def inject_violations(
         "decoys": decoys_added,
         "decoy_ratio": decoy_ratio,
     }
+    # Tanılama: applied=0 ise neden? İlk birkaç skip sebebini topla.
+    if applied == 0 and skipped > 0:
+        reasons = [l.get("reason", "?") for l in labels
+                   if l.get("status") == "skipped"][:3]
+        summary["skip_sample_reasons"] = reasons
     labels_doc = {
         "ifc_file": out_ifc.name,
         "baseline_id": baseline_id,
@@ -537,11 +547,12 @@ def inject_violations(
     graph_path: str | None = None
     try:
         from . import ifc_graph
-        gp = out_dir / f"{out_id}.graph.json"
+        gp = out_dir / f"{_stem}.graph.json"
         ifc_graph.build_and_save(out_ifc, gp)
         graph_path = str(gp)
-    except Exception:
+    except Exception as _ge:
         graph_path = None
+        summary["graph_error"] = str(_ge)
 
     # dataset_tag'ı parent baseline'dan miras al (varsa) — eğitim/listeleme
     # sayfalarında violated IFC'ler parent paketle birlikte görünür.
