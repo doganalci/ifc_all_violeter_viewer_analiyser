@@ -28,7 +28,7 @@ from ml.app.state import load_sample_for, sidebar_config
 from ml.data.pyg_dataset import sample_to_data
 from ml.train.config import TrainConfig
 from ml.train.metrics import evaluate_predictions
-from ml.viz.graph_view import static_plotly
+from ml.viz.graph_view import interactive_agraph, static_plotly
 from ml.viz.ifc3d import build_figure, extract_meshes
 
 
@@ -209,7 +209,9 @@ st.caption(
     "ayrıca hata analizi tablosu."
 )
 
-from ml.app.state import entry_by_id, get_dataset_root  # local — sadece bu sayfa için
+from ml.app.state import (
+    entry_by_id, get_dataset_root, get_selected_node, set_selected_node,
+)
 import os as _os
 
 node_ids = data.node_ids
@@ -226,13 +228,37 @@ if entry.get("parent_id"):
     if baseline_entry and baseline_entry.get("graph_ok"):
         baseline_sample = load_sample_for(baseline_entry)
 
+# Seçili node — graph'lardan birine tıklandığında IFC 3D'lerde mavi vurgu.
+selected_guid = get_selected_node()
+all_guids: set[str] = set(g.nodes)
+if baseline_sample:
+    all_guids |= set(baseline_sample.graph.nodes)
+if selected_guid not in all_guids:
+    selected_guid = None
+
+# Seçili node bilgi paneli
+if selected_guid:
+    info_cols = st.columns([5, 1])
+    with info_cols[0]:
+        nd = (g.nodes.get(selected_guid)
+              or (baseline_sample.graph.nodes.get(selected_guid) if baseline_sample else None)
+              or {})
+        ifc_type = nd.get("ifc_type") or nd.get("type") or "?"
+        name = (nd.get("attributes") or {}).get("Name", "")
+        st.info(f"🔵 Seçili: **{ifc_type}** · {selected_guid}  ·  {name}")
+    with info_cols[1]:
+        if st.button("✕ Seçimi temizle", use_container_width=True):
+            set_selected_node(None)
+            st.rerun()
+
 cols_top = st.columns(3)
 cols_bot = st.columns(3)
 
 
 def _render_3d(slot, title: str, ifc_path: str | None,
                highlights_red: set[str], highlights_green: set[str],
-               highlights_amber: set[str] = set()):
+               highlights_amber: set[str] = set(),
+               sel: str | None = None, key_suffix: str = ""):
     slot.markdown(f"**{title}**")
     if not ifc_path or not _os.path.exists(ifc_path):
         slot.caption("IFC dosyası bulunamadı.")
@@ -250,64 +276,80 @@ def _render_3d(slot, title: str, ifc_path: str | None,
         violation_guids=highlights_red,
         decoy_guids=highlights_amber,
         path_guids=highlights_green,
-        height=480,
+        selected_guid=sel,        # 🔵 mavi vurgu
+        height=460,
     )
-    slot.plotly_chart(fig, use_container_width=True)
+    slot.plotly_chart(fig, use_container_width=True, key=f"ifc_{key_suffix}")
 
 
 def _render_graph(slot, title: str, graph,
                   highlights_red: set[str], highlights_green: set[str],
-                  highlights_amber: set[str] = set()):
+                  highlights_amber: set[str] = set(),
+                  sel: str | None = None, key_suffix: str = "") -> str | None:
     slot.markdown(f"**{title}**")
     if graph is None:
         slot.caption("Grafik yok.")
-        return
-    fig = static_plotly(
+        return None
+    # interactive_agraph: tıklanabilir + sürüklenebilir (vis-network)
+    clicked = interactive_agraph(
         graph,
         violation_guids=highlights_red,
         decoy_guids=highlights_amber,
         path_guids=highlights_green,
-        height=420,
+        selected_guid=sel,
+        height=400,
+        key=f"graph_{key_suffix}",
     )
-    slot.plotly_chart(fig, use_container_width=True)
+    return clicked
 
 
 # Sütun 1 — BASELINE (temiz, vurgu yok)
 baseline_ifc = baseline_entry.get("ifc_path") if baseline_entry else None
 baseline_graph = baseline_sample.graph if baseline_sample else None
 _render_3d(cols_top[0], "🧱 Baseline IFC (ham)",
-           baseline_ifc, set(), set())
-_render_graph(cols_bot[0], "Baseline grafik",
-              baseline_graph, set(), set())
+           baseline_ifc, set(), set(),
+           sel=selected_guid, key_suffix="baseline")
+clicked_base = _render_graph(cols_bot[0], "Baseline grafik",
+                             baseline_graph, set(), set(),
+                             sel=selected_guid, key_suffix="baseline")
 if baseline_entry is None:
     cols_top[0].caption("Bu kayıt için baseline yok (parent_id boş veya imports).")
 
 # Sütun 2 — INJECTED / GROUND TRUTH (kırmızı = gerçek enjekte ihlaller, sarı = decoy)
 _render_3d(cols_top[1], "💥 İhlal Edilmiş IFC (gerçek)",
-           entry["ifc_path"], true_guids, set(), decoy_guids)
-_render_graph(cols_bot[1], "İhlal grafiği (kırmızı=gerçek, sarı=decoy)",
-              g, true_guids, set(), decoy_guids)
+           entry["ifc_path"], true_guids, set(), decoy_guids,
+           sel=selected_guid, key_suffix="violated")
+clicked_vio = _render_graph(cols_bot[1], "İhlal grafiği (kırmızı=gerçek, sarı=decoy)",
+                            g, true_guids, set(), decoy_guids,
+                            sel=selected_guid, key_suffix="violated")
 
 # Sütun 3 — MODEL PREDICTION (yeşil = tahmin)
 _render_3d(cols_top[2], "🤖 Model Tahmini",
-           entry["ifc_path"], set(), predicted_guids)
-_render_graph(cols_bot[2], "Tahmin grafiği (yeşil=GAT)",
-              g, set(), predicted_guids)
+           entry["ifc_path"], set(), predicted_guids,
+           sel=selected_guid, key_suffix="pred")
+clicked_pred = _render_graph(cols_bot[2], "Tahmin grafiği (yeşil=GAT)",
+                             g, set(), predicted_guids,
+                             sel=selected_guid, key_suffix="pred")
+
+# Tıklamayı yakala — herhangi bir grafikten gelen yeni seçimi state'e yaz.
+for clk in (clicked_base, clicked_vio, clicked_pred):
+    if clk and clk != selected_guid:
+        set_selected_node(clk)
+        st.rerun()
 
 st.caption(
-    "💡 Yeşil + kırmızı çakışıyor → **TP** (doğru bulundu). "
-    "Sadece yeşil → **FP** (yanlış alarm). "
-    "Sadece kırmızı → **FN** (kaçırıldı). "
-    "Sarı tonlar decoy'lar — model bunlara yeşil verirse kanmış demektir."
+    "💡 **Tıkla / sürükle:** Grafik node'larını sürükleyebilir, tıklayarak "
+    "ilgili IFC elemanını üç 3D görünümde de **mavi** vurgulu görebilirsin. "
+    "Renk legend: yeşil+kırmızı çakışma=TP, sadece yeşil=FP, sadece kırmızı=FN, sarı=decoy."
 )
 
 # ---- Confusion table --------------------------------------------------------
 st.divider()
 st.subheader("Hata analizi")
 tp = sorted(predicted_guids & true_guids)
-fp = sorted(predicted_guids - true_guids - set(decoy_show))
+fp = sorted(predicted_guids - true_guids - decoy_guids)
 fn = sorted(true_guids - predicted_guids)
-decoy_fp = sorted(predicted_guids & set(sample.decoy_guids))
+decoy_fp = sorted(predicted_guids & decoy_guids)
 
 cols = st.columns(4)
 cols[0].metric("TP", len(tp))
