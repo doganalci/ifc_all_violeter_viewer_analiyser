@@ -70,6 +70,7 @@ def main() -> None:
         root=cfg.cache_root,
         dataset_root=cfg.dataset_root,
         include_baselines=cfg.include_baselines,
+        use_rule_oracle=getattr(cfg, "use_rule_oracle", False),
     )
     baseline_ids = [ds[i].baseline_id for i in range(len(ds))]
     splits = split_by_baseline(

@@ -138,6 +138,7 @@ def run_training(
         root=cfg.cache_root,
         dataset_root=cfg.dataset_root,
         include_baselines=cfg.include_baselines,
+        use_rule_oracle=cfg.use_rule_oracle,
     )
     if filter_ifc_ids is not None:
         allow = set(filter_ifc_ids)

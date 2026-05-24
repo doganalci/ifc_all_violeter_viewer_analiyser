@@ -122,15 +122,40 @@ if not violated_entries:
         )
     st.stop()
 
-include_baselines = st.checkbox(
-    "Baseline'ları da dahil et (label=0 örneği olarak)",
-    value=False,
-    help="Açarsan ihlal içermeyen modeller de eğitim sinyaline katılır. "
-         "Pozitif/negatif oranını dengelemek için faydalı olabilir.",
-)
+aug_cols = st.columns(2)
+with aug_cols[0]:
+    include_baselines = st.checkbox(
+        "Baseline'ları da dahil et (label=0 örneği olarak)",
+        value=False,
+        help="Açarsan ihlal içermeyen modeller de eğitim sinyaline katılır. "
+             "Pozitif/negatif oranını dengelemek için faydalı olabilir.",
+    )
+with aug_cols[1]:
+    use_rule_oracle = st.checkbox(
+        "📏 Kural-tabanlı oracle ile etiket augmentation",
+        value=True,
+        help=(
+            "Eğitim öncesi geometrik kurallarla (kapı genişliği <90 cm, "
+            "korkuluk <90 cm, vb.) etiketsiz ihlalleri otomatik bulup pozitif "
+            "örnek olarak ekler. Closed-world supervision sorununu çözer: "
+            "model sadece enjekte ettiğimiz ihlalleri değil, baseline'larda "
+            "zaten var olan gerçek ihlalleri de öğrenir."
+        ),
+    )
+
+with st.expander("📖 Oracle kural listesi"):
+    from ml.data.rule_oracle import summarize_rules
+    st.dataframe(pd.DataFrame(summarize_rules()),
+                 hide_index=True, use_container_width=True)
+    st.caption(
+        "Eşikler TS 9111 / ADA referansları üzerinden kabaca türetilmiştir. "
+        "Yeni kural eklemek için: `ml/data/rule_oracle.py` → `RULES` tuple'ına "
+        "ekle (cache invalidate olur)."
+    )
 
 st.success(f"✅ {len(violated_entries)} violated IFC seçildi"
-           + (" (+ baseline'lar)" if include_baselines else ""))
+           + (" (+ baseline'lar)" if include_baselines else "")
+           + (" + oracle etiket augment" if use_rule_oracle else ""))
 
 # ---- Split control ----------------------------------------------------------
 st.subheader("2. Train / Val / Test bölünmesi")
@@ -213,6 +238,7 @@ cfg = TrainConfig(
     dataset_root=root,
     cache_root="./data/cache",
     include_baselines=include_baselines,
+    use_rule_oracle=use_rule_oracle,
     model=model_type,
     hidden_dim=int(hidden_dim),
     heads=int(heads),
@@ -401,24 +427,54 @@ if start:
                 f"**TN={cm.get('tn', 0)}** doğru reddedilen normal"
             )
 
-        # Per-category P/R/F1
+        # Per-category breakdown
         per_p = t.get("per_category_precision", {})
         per_r = t.get("per_category_recall", {})
         per_f = t.get("per_category_f1", {})
         per_s = t.get("per_category_support", {})
         if per_r:
-            st.markdown("**Kategori bazında P / R / F1**")
+            st.markdown("### Kategori Bazında Performans")
+
+            # Sayısal tablo: P/R/F1/Support + türetilmiş TP/FN
             cat_rows = []
             for c in sorted(set(per_r) | set(per_p)):
+                sup = int(per_s.get(c, 0))
+                rec = per_r.get(c, 0.0)
+                tp_c = round(rec * sup)
+                fn_c = sup - tp_c
                 cat_rows.append({
                     "kategori": c,
                     "precision": per_p.get(c, 0.0),
-                    "recall": per_r.get(c, 0.0),
+                    "recall": rec,
                     "f1": per_f.get(c, 0.0),
-                    "support": per_s.get(c, 0),
+                    "TP": tp_c,
+                    "FN": fn_c,
+                    "support": sup,
                 })
             cat_df = pd.DataFrame(cat_rows).sort_values("f1")
             st.dataframe(cat_df, hide_index=True, use_container_width=True)
+
+            # Stacked bar: TP (yeşil) + FN (kırmızı) per kategori
+            st.markdown("**TP / FN dağılımı (kaç pozitif yakaladık vs kaçırdık)**")
+            stack_df = cat_df[["kategori", "TP", "FN"]].set_index("kategori")
+            st.bar_chart(stack_df, color=["#22c55e", "#ef4444"])
+
+            # Renk-kodlu metrik bar chart
+            st.markdown("**Precision / Recall / F1 — kategoriler arası karşılaştırma**")
+            metric_df = cat_df.set_index("kategori")[["precision", "recall", "f1"]]
+            st.bar_chart(metric_df)
+
+            # Uyarı: zayıf kategoriler
+            weak = cat_df[cat_df["f1"] < 0.7]
+            if not weak.empty:
+                with st.expander(f"⚠️ Zayıf kategoriler ({len(weak)})", expanded=True):
+                    for _, row in weak.iterrows():
+                        st.warning(
+                            f"**{row['kategori']}** — F1={row['f1']:.2f} "
+                            f"(R={row['recall']:.2f}, P={row['precision']:.2f}) "
+                            f"· {row['TP']}/{row['support']} yakalandı, "
+                            f"{row['FN']} kaçırıldı."
+                        )
 
     st.code(summary["run_dir"])
     st.caption(

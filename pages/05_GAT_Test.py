@@ -272,19 +272,40 @@ with cm_col2:
     )
 
 if agg.per_category_recall:
-    st.subheader("Kategori bazında P / R / F1")
+    st.subheader("Kategori Bazında Performans")
     cat_rows = []
     for c in sorted(set(agg.per_category_recall) | set(agg.per_category_precision)):
+        sup = int(agg.per_category_support.get(c, 0))
+        rec = agg.per_category_recall.get(c, 0.0)
+        tp_c = round(rec * sup)
+        fn_c = sup - tp_c
         cat_rows.append({
             "kategori": c,
             "precision": agg.per_category_precision.get(c, 0.0),
-            "recall": agg.per_category_recall.get(c, 0.0),
+            "recall": rec,
             "f1": agg.per_category_f1.get(c, 0.0),
-            "support": agg.per_category_support.get(c, 0),
+            "TP": tp_c,
+            "FN": fn_c,
+            "support": sup,
         })
     cat_df = pd.DataFrame(cat_rows).sort_values("f1")
     st.dataframe(cat_df, hide_index=True, use_container_width=True)
+
+    st.markdown("**TP / FN dağılımı (kaç pozitif yakaladık vs kaçırdık)**")
+    st.bar_chart(cat_df[["kategori", "TP", "FN"]].set_index("kategori"),
+                 color=["#22c55e", "#ef4444"])
+
+    st.markdown("**Precision / Recall / F1**")
     st.bar_chart(cat_df.set_index("kategori")[["precision", "recall", "f1"]])
+
+    weak = cat_df[cat_df["f1"] < 0.7]
+    if not weak.empty:
+        with st.expander(f"⚠️ Zayıf kategoriler ({len(weak)})", expanded=True):
+            for _, row in weak.iterrows():
+                st.warning(
+                    f"**{row['kategori']}** — F1={row['f1']:.2f} · "
+                    f"{row['TP']}/{row['support']} yakalandı, {row['FN']} kaçırıldı."
+                )
 
 # ---- Per-IFC table ---------------------------------------------------------
 st.subheader("Her IFC için sonuç")

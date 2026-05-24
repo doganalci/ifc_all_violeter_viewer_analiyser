@@ -88,10 +88,12 @@ class IFCViolationDataset(InMemoryDataset):
         root: str | Path,
         dataset_root: str | Path,
         include_baselines: bool = False,
+        use_rule_oracle: bool = False,
         transform: Callable | None = None,
     ):
         self._dataset_root = Path(dataset_root).expanduser().resolve()
         self._include_baselines = include_baselines
+        self._use_rule_oracle = use_rule_oracle
         super().__init__(str(Path(root)), transform=transform)
         self.load(self.processed_paths[0])
 
@@ -101,26 +103,42 @@ class IFCViolationDataset(InMemoryDataset):
 
     @property
     def processed_file_names(self) -> list[str]:
-        suffix = "_with_base" if self._include_baselines else ""
+        suffix = ""
+        if self._include_baselines:
+            suffix += "_with_base"
+        if self._use_rule_oracle:
+            suffix += "_oracle"
         return [f"ifc_violation{suffix}.pt"]
 
     def download(self) -> None:  # noqa: D401
         return None
 
     def process(self) -> None:
+        from ml.data.rule_oracle import augment_sample  # local import — torch yokken de modül yüklensin
+
         data_list: list[Data] = []
+        oracle_total = 0
         with DatasetReader(self._dataset_root) as reader:
             for entry in iter_violated_with_paths(reader):
                 sample = load_sample(
                     entry.graph_path, entry.labels_path, ifc_id=entry.id
                 )
+                if self._use_rule_oracle:
+                    n_added, _ = augment_sample(sample)
+                    oracle_total += n_added
                 data_list.append(sample_to_data(sample))
             if self._include_baselines:
                 for entry in reader.list_baselines():
                     if not (entry.graph_path and entry.graph_path.exists()):
                         continue
                     sample = load_sample(entry.graph_path, None, ifc_id=entry.id)
+                    if self._use_rule_oracle:
+                        n_added, _ = augment_sample(sample)
+                        oracle_total += n_added
                     data_list.append(sample_to_data(sample))
+        if self._use_rule_oracle:
+            print(f"[oracle] {oracle_total} kural-tabanlı pozitif etiket eklendi "
+                  f"({len(data_list)} IFC üzerinden)")
         if not data_list:
             raise RuntimeError(
                 f"No violated IFCs with graph+labels found under {self._dataset_root}"
