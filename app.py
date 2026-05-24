@@ -916,10 +916,11 @@ with top_ifc:
             par_cols = st.columns([1, 3])
             with par_cols[0]:
                 batch_concurrency = st.number_input(
-                    "⚡ Eşzamanlı (paralel)", 1, 32, 8,
+                    "⚡ Eşzamanlı (paralel)", 1, 32, 5,
                     key="single_batch_concurrency",
-                    help="Aynı anda kaç IFC enjeksiyonu çalışsın. LLM çağrıları "
-                         "I/O-bound olduğu için 8-16 arası tipik 8-16x hızlanma.",
+                    help="Aynı anda kaç IFC enjeksiyonu çalışsın. 429 rate-limit "
+                         "olursa otomatik retry+backoff devreye girer. TPM "
+                         "limiti düşükse (gpt-4o-mini 200k) 4-6 güvenli.",
                 )
             with par_cols[1]:
                 _per_call = max(int(batch_per_variant), 1)
@@ -1351,9 +1352,10 @@ with top_ifc:
             value=True, key="pipe_fill",
         )
         pipe_concurrency = st.number_input(
-            "⚡ Paralel LLM iş parçacığı", 1, 32, 8,
+            "⚡ Paralel LLM iş parçacığı", 1, 32, 5,
             key="pipe_concurrency",
-            help="Aynı anda kaç enjeksiyon çalışsın. LLM çağrıları I/O-bound; "
+            help="Aynı anda kaç enjeksiyon çalışsın. 429 rate-limit'te otomatik "
+                 "retry+backoff var. TPM düşükse 4-6 güvenli. "
                  "8-16 tipik 8-16x hızlanma. OpenAI rate-limit'e dikkat.",
         )
 
