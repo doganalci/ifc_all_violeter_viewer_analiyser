@@ -135,10 +135,34 @@ st.caption(
 # ihlal listesi de baseline'ın kendi graph'ına ihtiyaç duymaz. (require_graph
 # True iken graph'sız sentetik baseline'lar gizleniyordu → liste boş kalıyordu.)
 from ml.app.state import violated_children as _vchildren
-_baselines = _list_entries(root, kind="baseline", require_graph=False)
-# Sadece en az bir ihlali olan baseline'ları öne çıkar (gezilebilir olanlar);
-# yine de hiç ihlali olmayanları da en sona ekle ki baseline 3D'si görülebilsin.
-_vio_counts = {b["id"]: len(_vchildren(root, b["id"])) for b in _baselines}
+_all_baselines = _list_entries(root, kind="baseline", require_graph=False)
+_vio_counts = {b["id"]: len(_vchildren(root, b["id"])) for b in _all_baselines}
+
+
+def _pkg_of(b: dict) -> str:
+    """Baseline'ın oluşturulduğu paket (ana isim). dataset_tag yoksa
+    dosya adından türet (ör. 'basic2+1_baseline_v09_22_00044' →
+    'basic2+1_baseline_v09_22')."""
+    tag = b.get("dataset_tag")
+    if tag:
+        return tag
+    import re as _re
+    return _re.sub(r"_\d+$", "", b.get("name") or "(isimsiz)") or "(isimsiz)"
+
+
+# 1) Önce paket (baseline'ı oluşturduğumuz ana isim) seç
+_pkgs = sorted({_pkg_of(b) for b in _all_baselines})
+_pkg_counts = {p: sum(1 for b in _all_baselines if _pkg_of(b) == p) for p in _pkgs}
+_psel = st.selectbox(
+    "📦 Paket (baseline ana ismi)",
+    options=[None] + _pkgs,
+    index=0,
+    format_func=lambda p: ("— hepsi —" if p is None
+                           else f"{p} · {_pkg_counts.get(p, 0)} baseline"),
+    key="mv_pkg_browse",
+)
+# 2) Pakete göre baseline'ları süz, ihlal sayısına göre sırala
+_baselines = [b for b in _all_baselines if _psel is None or _pkg_of(b) == _psel]
 _baselines.sort(key=lambda b: (-_vio_counts.get(b["id"], 0), b["name"]))
 _bopts = [None] + list(range(len(_baselines)))
 _bsel = st.selectbox(
@@ -194,15 +218,24 @@ if entry["kind"] == "violated" and entry.get("parent_id"):
 # ---- Top controls -----------------------------------------------------------
 ctrl_a, ctrl_b = st.columns([3, 2])
 with ctrl_a:
-    overlay = st.multiselect(
-        "Vurgu katmanları",
-        options=["İhlaller", "Decoys", "Normal (ihlal olmayan etiketli)"],
-        default=["İhlaller", "Decoys"],
-        help="Violated tarafında işaretli elemanları boyar: ihlal=kırmızı, "
-             "decoy=sarı, normal (uyumlu/clean etiketli)=yeşil. 'Normal' "
-             "katmanı tam etiketlemede tüm yapının açıkça 'ihlal değil' "
-             "işaretlendiğini görmeni sağlar.",
-    )
+    st.markdown("**Etiket katmanları** (kutucuklarla seç)")
+    ov_c = st.columns(3)
+    _ov_vio = ov_c[0].checkbox("🔴 İhlal", value=True, key="ov_vio",
+                               help="Kural ihlali (y=1) — kırmızı.")
+    _ov_decoy = ov_c[1].checkbox("🟡 Yalancı ihlal (decoy)", value=True,
+                                 key="ov_decoy",
+                                 help="İşaretli ama gerçek ihlal değil — sarı.")
+    _ov_normal = ov_c[2].checkbox("🟢 İhlal değil (etiketli)", value=False,
+                                  key="ov_normal",
+                                  help="Açıkça 'uygun/clean' etiketli node'lar — "
+                                       "yeşil. Tam etiketlemede tüm yapı.")
+    overlay = set()
+    if _ov_vio:
+        overlay.add("İhlaller")
+    if _ov_decoy:
+        overlay.add("Decoys")
+    if _ov_normal:
+        overlay.add("Normal (ihlal olmayan etiketli)")
 with ctrl_b:
     if entry["kind"] == "violated" and partner_entry is None:
         st.warning("Bu violated modelin baseline'ı listede yok; sadece violated görüntüleniyor.")

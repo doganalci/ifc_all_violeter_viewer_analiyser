@@ -122,6 +122,7 @@ def list_entries(root: str, kind: str | None = None,
             "meta_path": str(e.meta_path) if e.meta_path else None,
             "status": e.status,
             "graph_ok": graph_ok,
+            "dataset_tag": getattr(e, "dataset_tag", None),
         })
     return out
 

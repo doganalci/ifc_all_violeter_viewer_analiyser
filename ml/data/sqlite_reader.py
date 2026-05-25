@@ -26,6 +26,7 @@ class IFCEntry:
     graph_path: Path | None
     labels_path: Path | None
     meta_path: Path | None
+    dataset_tag: str | None = None
 
 
 class DatasetReader:
@@ -88,6 +89,7 @@ class DatasetReader:
             graph_path=self._resolve(row["graph_path"]),
             labels_path=self._resolve(row["labels_path"]),
             meta_path=self._resolve(row["meta_path"]),
+            dataset_tag=(row["dataset_tag"] if "dataset_tag" in row.keys() else None),
         )
 
     def list_models(self, kind: str | None = None, status: str = "ok") -> list[IFCEntry]:
