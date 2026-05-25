@@ -23,7 +23,7 @@ from typing import Iterable
 import networkx as nx
 
 from .ifc3d import (
-    COLOR_BASE, COLOR_DECOY, COLOR_PATH, COLOR_PATH_ALT,
+    COLOR_BASE, COLOR_DECOY, COLOR_NORMAL, COLOR_PATH, COLOR_PATH_ALT,
     COLOR_SELECTED, COLOR_VIOLATION,
 )
 
@@ -47,6 +47,7 @@ def _node_color(
     selected_guid: str | None,
     path_guids: set[str],
     path_alt_guids: set[str],
+    normal_guids: set[str] | None = None,
 ) -> str:
     if nid == selected_guid:
         return COLOR_SELECTED
@@ -58,6 +59,8 @@ def _node_color(
         return COLOR_VIOLATION
     if nid in decoy_guids:
         return COLOR_DECOY
+    if normal_guids and nid in normal_guids:
+        return COLOR_NORMAL
     return COLOR_BASE
 
 
@@ -66,6 +69,7 @@ def interactive_agraph(
     *,
     violation_guids: Iterable[str] | None = None,
     decoy_guids: Iterable[str] | None = None,
+    normal_guids: Iterable[str] | None = None,
     selected_guid: str | None = None,
     path_guids: Iterable[str] | None = None,
     path_alt_guids: Iterable[str] | None = None,
@@ -78,6 +82,7 @@ def interactive_agraph(
 
     vio = set(violation_guids or [])
     dc = set(decoy_guids or [])
+    normal = set(normal_guids or [])
     path = set(path_guids or [])
     path_alt = set(path_alt_guids or [])
 
@@ -88,6 +93,7 @@ def interactive_agraph(
             violation_guids=vio, decoy_guids=dc,
             selected_guid=selected_guid,
             path_guids=path, path_alt_guids=path_alt,
+            normal_guids=normal,
         )
         label = (d.get("ifc_type") or "?").removeprefix("Ifc")
         name = (d.get("attributes") or {}).get("Name")

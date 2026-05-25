@@ -78,7 +78,7 @@ def _panel_header(title: str, idx: int) -> bool:
                            help="Bu paneli tam genişlikte göster")
 
 
-def _render_ifc(meshes, *, violation_guids, decoy_guids,
+def _render_ifc(meshes, *, violation_guids, decoy_guids, normal_guids=None,
                 selected_guid, height, key_suffix=""):
     if meshes is None:
         st.info("IFC dosyası bulunamadı ya da ifcopenshell yok.")
@@ -87,13 +87,14 @@ def _render_ifc(meshes, *, violation_guids, decoy_guids,
         meshes,
         violation_guids=violation_guids,
         decoy_guids=decoy_guids,
+        normal_guids=normal_guids,
         selected_guid=selected_guid,
         height=height,
     )
     st.plotly_chart(fig, use_container_width=True, key=f"ifc_{key_suffix}")
 
 
-def _render_graph(sample, *, violation_guids, decoy_guids,
+def _render_graph(sample, *, violation_guids, decoy_guids, normal_guids=None,
                   selected_guid, height, key_suffix=""):
     if sample is None:
         st.info("Bu model için graph.json üretilmemiş.")
@@ -102,6 +103,7 @@ def _render_graph(sample, *, violation_guids, decoy_guids,
         sample.graph,
         violation_guids=violation_guids,
         decoy_guids=decoy_guids,
+        normal_guids=normal_guids,
         selected_guid=selected_guid,
         height=height,
         key=f"graph_{key_suffix}",
@@ -194,9 +196,12 @@ ctrl_a, ctrl_b = st.columns([3, 2])
 with ctrl_a:
     overlay = st.multiselect(
         "Vurgu katmanları",
-        options=["İhlaller", "Decoys"],
+        options=["İhlaller", "Decoys", "Normal (ihlal olmayan etiketli)"],
         default=["İhlaller", "Decoys"],
-        help="Violated tarafında işaretli elemanları kırmızı/sarı boyar.",
+        help="Violated tarafında işaretli elemanları boyar: ihlal=kırmızı, "
+             "decoy=sarı, normal (uyumlu/clean etiketli)=yeşil. 'Normal' "
+             "katmanı tam etiketlemede tüm yapının açıkça 'ihlal değil' "
+             "işaretlendiğini görmeni sağlar.",
     )
 with ctrl_b:
     if entry["kind"] == "violated" and partner_entry is None:
@@ -262,8 +267,22 @@ else:
     violation_guids = set()
     decoy_guids = set()
 
+# Normal = etikette açıkça 'ihlal değil' (compliant / clean) işaretli node'lar.
+# İhlal ve decoy hariç tutulur; labels.json'dan okunur.
+normal_guids: set[str] = set()
+if violated_entry is not None:
+    _doc = labels_summary(violated_entry) or {}
+    for _l in _doc.get("labels", []):
+        _g = _l.get("ifc_global_id")
+        _stt = (_l.get("status") or "").lower()
+        if _g and _stt in ("compliant", "clean") and not _l.get("is_decoy"):
+            normal_guids.add(_g)
+    normal_guids -= violation_guids
+    normal_guids -= decoy_guids
+
 vio_show = violation_guids if "İhlaller" in overlay else set()
 dec_show = decoy_guids if "Decoys" in overlay else set()
+nor_show = normal_guids if "Normal (ihlal olmayan etiketli)" in overlay else set()
 
 # ---- Selected node + panels -------------------------------------------------
 current = get_selected_node()
@@ -297,6 +316,7 @@ def panel_violated_ifc(height: int):
     _render_ifc(violated_meshes,
                 violation_guids=vio_show,
                 decoy_guids=dec_show,
+                normal_guids=nor_show,
                 selected_guid=current,
                 height=height, key_suffix="violated_ifc")
 
@@ -316,6 +336,7 @@ def panel_violated_graph(height: int):
     clicked = _render_graph(violated_sample,
                             violation_guids=vio_show,
                             decoy_guids=dec_show,
+                            normal_guids=nor_show,
                             selected_guid=current,
                             height=height, key_suffix="violated_graph")
     if clicked and clicked != current:
