@@ -23,14 +23,38 @@ cd ifc_all_violeter_viewer_analiyser
 git checkout claude/consolidate-developments-CrLud
 conda create -n violation-pool python=3.11 -y
 conda activate violation-pool
-pip install -r requirements.txt
-pip install watchdog
 ```
 
-PyTorch CUDA için (NVIDIA GPU varsa, eğitimi hızlandırır):
+### torch + bağımlılıklar — kurulum script'i (ÖNERİLEN)
+
 ```powershell
-pip install torch --index-url https://download.pytorch.org/whl/cu121
+.\setup_windows.ps1
+```
+
+Bu script GPU'yu otomatik algılar:
+- **NVIDIA GPU varsa** → `conda install pytorch pytorch-cuda=12.1` (CUDA build)
+- **GPU yoksa** → CPU torch
+- Sonra torch_geometric + requirements.txt + doğrulama
+
+> ⚠️ **ÖNEMLİ:** Düz `pip install torch` Windows'ta **CPU-only** build verir
+> (GPU çalışmaz). Mutlaka script'i veya aşağıdaki manuel adımları kullan.
+
+### Manuel (script çalışmazsa)
+
+```powershell
+# GPU varsa (conda, en sağlam):
+conda install -c pytorch -c nvidia pytorch pytorch-cuda=12.1 -y
+# conda/pip karışırsa: yukarıdakine --force-reinstall ekle
+
+# GPU yoksa:
+# pip install torch --index-url https://download.pytorch.org/whl/cpu
+
 pip install torch_geometric
+pip install -r requirements.txt
+pip install watchdog
+
+# Kontrol:
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 ```
 
 ## 2) Data Klasörü
