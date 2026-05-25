@@ -35,6 +35,38 @@ from ml.train.config import TrainConfig
 
 st.set_page_config(page_title="GAT Eğitim", layout="wide", page_icon="🏋️")
 st.title("🏋️ GAT Eğitim")
+
+# GPU durum göstergesi
+def _gpu_status():
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return True, f"🟢 GPU aktif: {torch.cuda.get_device_name(0)} (CUDA {torch.version.cuda})"
+        ver = getattr(torch, "__version__", "?")
+        cpu_only = "+cpu" in ver or torch.version.cuda is None
+        return False, (f"🔴 GPU YOK — CPU build (torch {ver}). "
+                       "NVIDIA kartın varsa CUDA torch kur (aşağıda komut).")
+    except Exception as e:
+        return False, f"⚠️ torch yüklü değil: {e}"
+
+_gpu_ok, _gpu_msg = _gpu_status()
+if _gpu_ok:
+    st.success(_gpu_msg)
+else:
+    st.warning(_gpu_msg)
+    with st.expander("⚙️ GPU'yu nasıl aktif ederim? (NVIDIA)"):
+        st.code(
+            "# Mevcut CPU torch'u kaldır, CUDA build kur (CUDA 12.1 örneği):\n"
+            "pip uninstall -y torch torch_geometric\n"
+            "pip install torch --index-url https://download.pytorch.org/whl/cu121\n"
+            "pip install torch_geometric\n"
+            "# Kontrol:\n"
+            'python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"',
+            language="powershell",
+        )
+        st.caption("CUDA sürümünü `nvidia-smi` ile öğren; cu118/cu121/cu124 "
+                   "uygun olanı seç. Kurulumdan sonra Streamlit'i yeniden başlat.")
+
 st.caption(
     "Hiperparametreleri ayarla, dataset filtresini seç, **Eğitimi başlat**'a bas. "
     "Eğitim bu sayfada koşar; her epoch sonunda canlı metrikler güncellenir."

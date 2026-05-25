@@ -152,19 +152,41 @@ with ctrl_b:
     elif entry["kind"] == "violated":
         st.success(f"Baseline ile karşılaştırılıyor: `{partner_entry['id'][:8]}`")
     elif entry["kind"] == "baseline":
-        # Allow opening any one of its violated children alongside.
+        # Baseline seçilince: ondan üretilen TÜM ihlalleri gez (prev/next).
         from ml.app.state import violated_children
         kids = violated_children(root, entry["id"])
         if kids:
-            kid_idx = st.selectbox(
-                "Yan yana göstermek için violated seç (opsiyonel)",
-                options=[None] + list(range(len(kids))),
-                format_func=lambda i: "— yok —" if i is None
-                                       else f"{kids[i]['name']} · {kids[i]['id'][:8]}",
-            )
-            if kid_idx is not None:
-                partner_entry = kids[kid_idx]
-                partner_sample = load_sample_for(partner_entry)
+            st.caption(f"🔢 Bu baseline'dan **{len(kids)}** ihlal üretilmiş — "
+                       "sırayla gez:")
+            _key = f"viobrowse_{entry['id']}"
+            cur = st.session_state.get(_key, 0)
+            cur = max(0, min(cur, len(kids) - 1))
+            nav = st.columns([1, 1, 3, 1])
+            if nav[0].button("◀ Önceki", use_container_width=True,
+                             disabled=cur == 0, key=f"{_key}_prev"):
+                st.session_state[_key] = cur - 1
+                st.rerun()
+            if nav[1].button("Sonraki ▶", use_container_width=True,
+                             disabled=cur >= len(kids) - 1, key=f"{_key}_next"):
+                st.session_state[_key] = cur + 1
+                st.rerun()
+            with nav[2]:
+                picked = st.selectbox(
+                    "İhlal seç",
+                    options=list(range(len(kids))),
+                    index=cur,
+                    format_func=lambda i: f"[{i+1}/{len(kids)}] {kids[i]['name']} · {kids[i]['id'][:8]}",
+                    key=f"{_key}_sel",
+                    label_visibility="collapsed",
+                )
+                if picked != cur:
+                    st.session_state[_key] = picked
+                    st.rerun()
+            nav[3].metric("Sıra", f"{cur+1}/{len(kids)}")
+            partner_entry = kids[cur]
+            partner_sample = load_sample_for(partner_entry)
+        else:
+            st.info("Bu baseline'dan henüz ihlal üretilmemiş.")
 
 # Determine which sample defines the violation/decoy sets (always
 # from the violated side — baseline has none of these labels).
