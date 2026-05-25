@@ -80,10 +80,11 @@ st.subheader("1. Hangi veride test edeceğiz?")
 
 split_map = summary.get("ifc_ids", {})
 default_set = "test"
-choice_options = ["test (eğitimde görmedi)", "val", "train", "baseline seç", "elle seç"]
+choice_options = ["test (eğitimde görmedi)", "val", "train",
+                  "paket (ana baseline) seç", "baseline seç", "elle seç"]
 if not split_map.get("test"):
-    default_set = "baseline seç"
-    choice_options = ["baseline seç", "elle seç"]
+    default_set = "paket (ana baseline) seç"
+    choice_options = ["paket (ana baseline) seç", "baseline seç", "elle seç"]
 choice = st.radio("Set", options=choice_options, horizontal=True,
                   index=choice_options.index({
                       "test": "test (eğitimde görmedi)",
@@ -92,12 +93,59 @@ choice = st.radio("Set", options=choice_options, horizontal=True,
                   }.get(default_set, default_set)) if default_set in (
                       "test", "val", "train") else 0)
 
+
+def _pkg_of(e: dict) -> str:
+    """Bir IFC'nin ait olduğu paket (ana baseline / dataset_tag).
+
+    dataset_tag yoksa dosya adından türetilir
+    (ör. 'basicinj_basic2+1_baseline_v09_22_00044_violated1' → kök paket)."""
+    import re as _re
+    tag = e.get("dataset_tag")
+    if tag:
+        return tag
+    nm = e.get("name") or "(isimsiz)"
+    nm = _re.sub(r"_violated\d+.*$", "", nm)        # _violatedN son ekini at
+    nm = _re.sub(r"^(basicinj|tametiket|llminj)_", "", nm)  # yöntem ön ekini at
+    nm = _re.sub(r"_\d+$", "", nm)                  # _00044 sayısını at
+    return nm or "(isimsiz)"
+
+
 if choice == "test (eğitimde görmedi)":
     selected_ids: list[str] = list(split_map.get("test") or [])
 elif choice == "val":
     selected_ids = list(split_map.get("val") or [])
 elif choice == "train":
     selected_ids = list(split_map.get("train") or [])
+elif choice == "paket (ana baseline) seç":
+    # Bir PAKET (ana baseline = dataset_tag) seç → o paketteki TÜM ihlaller.
+    # Eğitimde görülmemiş YENİ bir paketle gerçek genelleme testi için ideal.
+    all_violated = [e for e in list_entries(root, kind="violated") if e["graph_ok"]]
+    pkg_map: dict[str, list[dict]] = {}
+    for e in all_violated:
+        pkg_map.setdefault(_pkg_of(e), []).append(e)
+    if not pkg_map:
+        st.warning("Graph'lı ihlal içeren paket yok. Önce ihlal üret.")
+        st.stop()
+    pkgs = sorted(pkg_map, key=lambda p: -len(pkg_map[p]))
+    # Eğitimde kullanılan paketi işaretle (train split'inden türet)
+    _train_ids = set(split_map.get("train") or []) | set(split_map.get("val") or [])
+    psel = st.selectbox(
+        "📦 Paket (ana baseline)",
+        options=pkgs,
+        format_func=lambda p: (
+            f"{p} · {len(pkg_map[p])} ihlal"
+            + ("  ⚠️ eğitimde kullanıldı" if any(
+                e["id"] in _train_ids for e in pkg_map[p]) else "  ✅ yeni (görülmedi)")),
+    )
+    selected_ids = [e["id"] for e in pkg_map.get(psel, [])]
+    _seen = any(e["id"] in _train_ids for e in pkg_map.get(psel, []))
+    if _seen:
+        st.warning(
+            "Bu paketin bir kısmı **eğitimde kullanıldı** — gerçek genelleme "
+            "ölçümü için modelin hiç görmediği YENİ bir paket üret ve onu seç.")
+    else:
+        st.success(f"`{psel}` paketi modelin **hiç görmediği** veri → "
+                   f"gerçek genelleme testi ({len(selected_ids)} ihlal).")
 elif choice == "baseline seç":
     # Bir baseline seç → ondan üretilen TÜM ihlalleri test et
     baselines = [e for e in list_entries(root, kind="baseline", require_graph=False)]
