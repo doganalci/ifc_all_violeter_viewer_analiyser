@@ -94,20 +94,13 @@ choice = st.radio("Set", options=choice_options, horizontal=True,
                       "test", "val", "train") else 0)
 
 
-def _pkg_of(e: dict) -> str:
-    """Bir IFC'nin ait olduğu paket (ana baseline / dataset_tag).
-
-    dataset_tag yoksa dosya adından türetilir
-    (ör. 'basicinj_basic2+1_baseline_v09_22_00044_violated1' → kök paket)."""
+def _pkg_from_name(nm: str | None) -> str:
     import re as _re
-    tag = e.get("dataset_tag")
-    if tag:
-        return tag
-    nm = e.get("name") or "(isimsiz)"
-    nm = _re.sub(r"_violated\d+.*$", "", nm)        # _violatedN son ekini at
+    nm = nm or ""
+    nm = _re.sub(r"_violated\d+.*$", "", nm)              # _violatedN son ekini at
     nm = _re.sub(r"^(basicinj|tametiket|llminj)_", "", nm)  # yöntem ön ekini at
-    nm = _re.sub(r"_\d+$", "", nm)                  # _00044 sayısını at
-    return nm or "(isimsiz)"
+    nm = _re.sub(r"_\d+$", "", nm)                        # _00044 sayısını at
+    return nm
 
 
 if choice == "test (eğitimde görmedi)":
@@ -120,6 +113,22 @@ elif choice == "paket (ana baseline) seç":
     # Bir PAKET (ana baseline = dataset_tag) seç → o paketteki TÜM ihlaller.
     # Eğitimde görülmemiş YENİ bir paketle gerçek genelleme testi için ideal.
     all_violated = [e for e in list_entries(root, kind="violated") if e["graph_ok"]]
+    all_baselines = list_entries(root, kind="baseline", require_graph=False)
+    # Ana baseline (parent) → paket adı. Violated kendi dataset_tag'ı boşsa
+    # paketi PARENT baseline'dan çözüyoruz (Tam Etiketleme'de violated tag'siz
+    # kalabiliyor → '(etiketsiz)' görünmesini bu engelliyor).
+    _base_pkg = {b["id"]: (b.get("dataset_tag")
+                           or _pkg_from_name(b.get("name")) or "(isimsiz)")
+                 for b in all_baselines}
+
+    def _pkg_of(e: dict) -> str:
+        if e.get("dataset_tag"):
+            return e["dataset_tag"]
+        pid = e.get("parent_id")
+        if pid and pid in _base_pkg:
+            return _base_pkg[pid]
+        return _pkg_from_name(e.get("name")) or "(isimsiz)"
+
     pkg_map: dict[str, list[dict]] = {}
     for e in all_violated:
         pkg_map.setdefault(_pkg_of(e), []).append(e)
@@ -127,19 +136,29 @@ elif choice == "paket (ana baseline) seç":
         st.warning("Graph'lı ihlal içeren paket yok. Önce ihlal üret.")
         st.stop()
     pkgs = sorted(pkg_map, key=lambda p: -len(pkg_map[p]))
-    # Eğitimde kullanılan paketi işaretle (train split'inden türet)
+    # Eğitimde kullanılan paketi işaretle (train+val split'inden türet).
     _train_ids = set(split_map.get("train") or []) | set(split_map.get("val") or [])
+    _has_split = bool(_train_ids)
+
+    def _badge(p: str) -> str:
+        if not _has_split:
+            return ""   # bu run split bilgisi tutmuyor → emin değiliz, iddia etme
+        return ("  ⚠️ eğitimde kullanıldı"
+                if any(e["id"] in _train_ids for e in pkg_map[p])
+                else "  ✅ yeni (görülmedi)")
+
     psel = st.selectbox(
         "📦 Paket (ana baseline)",
         options=pkgs,
-        format_func=lambda p: (
-            f"{p} · {len(pkg_map[p])} ihlal"
-            + ("  ⚠️ eğitimde kullanıldı" if any(
-                e["id"] in _train_ids for e in pkg_map[p]) else "  ✅ yeni (görülmedi)")),
+        format_func=lambda p: f"{p} · {len(pkg_map[p])} ihlal{_badge(p)}",
     )
     selected_ids = [e["id"] for e in pkg_map.get(psel, [])]
-    _seen = any(e["id"] in _train_ids for e in pkg_map.get(psel, []))
-    if _seen:
+    _seen = _has_split and any(e["id"] in _train_ids for e in pkg_map.get(psel, []))
+    if not _has_split:
+        st.info("Bu run, hangi IFC'lerin eğitimde kullanıldığını kaydetmemiş; "
+                "'yeni mi' bilgisini gösteremiyorum. Modelin görmediğinden emin "
+                "olmak için tamamen yeni isimli bir paket üret ve onu seç.")
+    elif _seen:
         st.warning(
             "Bu paketin bir kısmı **eğitimde kullanıldı** — gerçek genelleme "
             "ölçümü için modelin hiç görmediği YENİ bir paket üret ve onu seç.")
