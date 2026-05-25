@@ -115,16 +115,40 @@ st.set_page_config(page_title="Model Görüntüleyici", layout="wide", page_icon
 entry = sidebar_config()
 
 st.title("🧱 Model Görüntüleyici")
-st.caption(
-    "Violated bir model seçince baseline ile **yan yana 4-panel** "
-    "karşılaştırma görürsün. Her panelin üstündeki **⛶ Büyüt** ile o "
-    "paneli tam genişliğe geçirebilirsin."
-)
 
 if entry is None:
     st.stop()
 
 root = get_dataset_root()
+
+# --- Üstte: Baseline'dan ihlalleri gez (sidebar Tür'üne bağlı değil) -------
+from ml.app.state import list_entries as _list_entries
+st.markdown("### 📦 Baseline'dan ihlalleri gez")
+st.caption(
+    "Bir baseline seç → ondan üretilen TÜM ihlalleri ◀▶ ile sırayla incele. "
+    "Solda baseline (temiz), sağda o ihlal. (Tek model incelemek için "
+    "soldaki sidebar'ı kullan.)"
+)
+_baselines = _list_entries(root, kind="baseline", require_graph=True)
+_bopts = [None] + list(range(len(_baselines)))
+_bsel = st.selectbox(
+    "Baseline seç (ihlallerini gezmek için)",
+    options=_bopts,
+    index=0,
+    format_func=lambda i: ("— sidebar seçimini kullan —" if i is None
+                            else f"{_baselines[i]['name']} · {_baselines[i]['id'][:8]}"),
+    key="mv_baseline_browse",
+)
+if _bsel is not None:
+    # Baseline gezgini moduna geç — entry'yi seçilen baseline yap
+    entry = _baselines[_bsel]
+
+st.divider()
+st.caption(
+    "Violated bir model seçince baseline ile **yan yana 4-panel** "
+    "karşılaştırma görürsün. Her panelin üstündeki **⛶ Büyüt** ile o "
+    "paneli tam genişliğe geçirebilirsin."
+)
 
 # Selected sample (may be None if graph not generated yet)
 sample = load_sample_for(entry)
