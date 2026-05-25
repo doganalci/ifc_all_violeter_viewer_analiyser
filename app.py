@@ -1487,16 +1487,23 @@ with top_ifc:
                     import json as _json
                     def _ev_short(ev_json: str | None) -> str:
                         try:
-                            evs = _json.loads(ev_json or "[]") or []
+                            evs = _json.loads(ev_json or "[]")
                         except Exception:
-                            evs = []
-                        if not evs:
+                            # Düz metin (basic_inject string evidence yazabilir)
+                            return (ev_json or "")[:80]
+                        # Tek string ya da string listesi olabilir (dict değil)
+                        if isinstance(evs, str):
+                            return evs[:80]
+                        if not isinstance(evs, list) or not evs:
                             return ""
                         parts = []
                         for e in evs[:3]:
-                            d = (e or {}).get("document") or "?"
-                            p = (e or {}).get("page")
-                            c = (e or {}).get("clause")
+                            if not isinstance(e, dict):
+                                parts.append(str(e)[:40])
+                                continue
+                            d = e.get("document") or "?"
+                            p = e.get("page")
+                            c = e.get("clause")
                             t = f"{d}"
                             if p is not None: t += f":p{p}"
                             if c: t += f" §{c}"
