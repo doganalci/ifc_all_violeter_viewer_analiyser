@@ -314,7 +314,8 @@ def _labels_to_doc(ifc_id: str, baseline_id: str, labels: list[dict]) -> dict:
 def run_basic_batch(dataset_tag: str, *, variants: int = 5, seed_start: int = 1000,
                     params: BasicParams | None = None,
                     register_in_db: bool = True, progress_cb=None,
-                    use_gpt: bool = False, model: str | None = None) -> dict:
+                    use_gpt: bool = False, model: str | None = None,
+                    full_label: bool = False) -> dict:
     """dataset_tag'li tüm baseline'lara basic ihlal enjekte et (LLM'siz).
 
     Her baseline için `variants` adet farklı varyant üretir.
@@ -372,6 +373,32 @@ def run_basic_batch(dataset_tag: str, *, variants: int = 5, seed_start: int = 10
                     graph_path = None
                     results.setdefault("graph_errors", []).append(
                         f"{stem}: {_ge}")
+
+                # TAM ETİKETLEME: graph'taki HER node'a açık etiket.
+                # İhlal/hard-negatif zaten doc'ta; geri kalan tüm node'lar
+                # 'clean' (y=0). Baseline garantili temiz olduğundan güvenli.
+                if full_label and graph_path:
+                    try:
+                        from ml.data.graph_loader import load_graph as _lg
+                        g = _lg(graph_path)
+                        labeled = {l["ifc_global_id"] for l in doc["labels"]}
+                        n_clean = 0
+                        for nid in g.nodes():
+                            if nid in labeled:
+                                continue
+                            doc["labels"].append({
+                                "ifc_global_id": nid, "category": "",
+                                "severity": "uygun", "status": "clean",
+                                "is_decoy": False, "attribute": None,
+                                "before": None, "after": None,
+                                "evidence": "Baseline temiz — kesin ihlal değil",
+                            })
+                            n_clean += 1
+                        lab_path.write_text(json.dumps(doc, indent=2,
+                                            ensure_ascii=False), encoding="utf-8")
+                        results["clean_labeled"] = results.get("clean_labeled", 0) + n_clean
+                    except Exception as _le:
+                        results.setdefault("label_errors", []).append(f"{stem}: {_le}")
                 # DB — sadece ihlal varsa 'ok', yoksa yine 'ok' (negatifler de
                 # değerli, hard negative). status='ok' eğitim listesine girsin.
                 if register_in_db:

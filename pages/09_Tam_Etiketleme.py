@@ -1,21 +1,17 @@
-"""Tam Etiketleme — baseline'ları KESİN temiz olarak işaretle.
+"""Tam Etiketleme — baseline'dan ihlalli üret + HER node'u açık etiketle.
 
-Mantık: Sentetik baseline'lar garantili compliant (eşik-altı parametre
-seçilemez). O halde her node'unu **kesin 'ihlal değil'** olarak
-işaretleyebiliriz. Bu:
-  * Closed-world varsayımını GEÇERLİ kılar (varsayım değil, bilinen gerçek)
-  * Modele bol GÜVENİLİR NEGATİF verir → over-flagging azalır → precision ↑
+Basic Injection ile aynı (kapı + kolon ihlali) ama farkı: üretilen
+violated IFC'lerde **her node'un** kesin etiketi yazılır:
+  * Enjekte edilen dar kapı / engelleyici kolon → ihlal (y=1)
+  * Değiştirilen ama uyumlu kapı / uzak kolon   → hard negative (y=0)
+  * Geri kalan TÜM node'lar (duvar, döşeme, dokunulmamış kapı, …)
+    → 'clean' (y=0)  ← baseline garantili temiz olduğu için KESİN
 
-Bu sayfa seçilen paketin baseline'larına 'hepsi temiz' labels.json yazar
-ve eğitime 'kesin negatif' olarak girmeye hazırlar. Violated IFC'ler
-zaten ihlalleri işaretli; bu ikisi birlikte tam etiketli set olur.
-
-Sonra GAT Eğitim'de **'Baseline'ları dahil et'** açılırsa bu temiz
-baseline'lar negatif örnek olarak eğitime katılır.
+Sonuç: closed-world tam geçerli, eksiksiz etiketli eğitim seti. Model
+hem ihlali hem ihlal-olmayanı kesin örneklerle öğrenir.
 """
 from __future__ import annotations
 
-import json
 import sys
 import time
 from pathlib import Path
@@ -26,25 +22,26 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
 from violation_pool import storage
-from ml.data.graph_loader import load_graph
+from violation_pool.basic_inject import (
+    BasicParams, MIN_DOOR_WIDTH_M, DOOR_CLEARANCE_M, run_basic_batch,
+)
 
 st.set_page_config(page_title="Tam Etiketleme", layout="wide", page_icon="✅")
-st.title("✅ Tam Etiketleme — Baseline = Kesin Temiz")
+st.title("✅ Tam Etiketleme — Üret + Her Node'u Etiketle")
 st.caption(
-    "Sentetik baseline'lar garantili compliant. Tüm node'larını **kesin "
-    "'ihlal değil'** olarak işaretle → modele güvenilir negatif örnek. "
-    "Violated IFC'lerle birlikte **tam etiketli** (her node'un kesin "
-    "kararı belli) bir eğitim seti olur."
+    "Basic Injection ile aynı (kapı + kolon) ama üretilen violated "
+    "dosyalarda **HER node'un** kesin etiketi yazılır: ihlaller (y=1), "
+    "uyumlu değişiklikler ve tüm yapı (y=0). Baseline garantili temiz "
+    "olduğu için 'geri kalan hepsi temiz' demek güvenli."
 )
-
 st.info(
-    "💡 Neden işe yarar: Model 'normal neye benzer'i bol örnekle öğrenir → "
-    "şüpheli görmediği şeye 'ihlal' deme eğilimi azalır → **precision artar** "
-    "(daha az yanlış alarm). Recall'ı düşürmeden FP'yi kırpar."
+    f"📏 Kurallar: Kapı ≥ {MIN_DOOR_WIDTH_M*100:.0f} cm · "
+    f"Kapı önü serbest ≥ {DOOR_CLEARANCE_M*100:.0f} cm. "
+    "Etiketler kuralla ölçülür (ground truth dürüst)."
 )
 
-# --- Paket seçimi ----------------------------------------------------------
-st.subheader("1. Baseline paketi seç")
+# --- Paket ----------------------------------------------------------------
+st.subheader("1. Baseline paketi")
 try:
     tags = storage.list_dataset_tags()
 except Exception as e:
@@ -53,108 +50,86 @@ base_tags = [t for t in tags if t.get("baseline", 0) > 0]
 if not base_tags:
     st.warning("Baseline içeren paket yok. Önce Sentetik Üretim ile üret.")
     st.stop()
-
 import pandas as pd
 st.dataframe(pd.DataFrame(base_tags)[["tag", "baseline", "violated", "total"]],
              hide_index=True, use_container_width=True)
 tag = st.selectbox("📦 Paket", [t["tag"] for t in base_tags])
 
-# --- Çalıştır --------------------------------------------------------------
-st.subheader("2. Baseline'ları 'kesin temiz' etiketle")
-st.caption(
-    "Her baseline için labels.json yazılır: tüm node'lar `status='clean'`, "
-    "`is_violation=False`. Eğitimde y=0 (kesin negatif) olur."
+# --- Parametreler (Basic Injection ile aynı) ------------------------------
+st.subheader("2. Parametreler")
+mode = st.radio("Üretim modu",
+                ["⚡ Kural tabanlı (hızlı)", "🤖 GPT destekli (çeşitli)"],
+                horizontal=True)
+use_gpt = mode.startswith("🤖")
+gpt_model = st.text_input("GPT modeli", "gpt-4o-mini") if use_gpt else "gpt-4o-mini"
+
+c1, c2, c3 = st.columns(3)
+with c1:
+    variants = st.number_input("🔁 Baseline başına varyant", 1, 50, 5)
+    seed_start = st.number_input("Tohum başlangıç", 0, 99999, 2000)
+with c2:
+    door_mod = st.slider("Değiştirilecek kapı oranı", 0.0, 1.0, 0.6, 0.1)
+    door_vio = st.slider("Dar (ihlal) kapı oranı", 0.0, 1.0, 0.5, 0.1)
+with c3:
+    col_ratio = st.slider("Kolon konan kapı oranı", 0.0, 1.0, 0.6, 0.1)
+    col_block = st.slider("Engelleyici kolon oranı", 0.0, 1.0, 0.5, 0.1)
+
+params = BasicParams(
+    door_modify_ratio=door_mod, door_violation_ratio=door_vio,
+    column_ratio=col_ratio, column_block_ratio=col_block,
 )
+n_baseline = next((t["baseline"] for t in base_tags if t["tag"] == tag), 0)
+st.metric("✨ Üretilecek violated IFC", n_baseline * int(variants))
 
-if st.button("✅ Baseline'ları tam-temiz etiketle", type="primary"):
-    base_ids = storage.ifc_ids_for_tags([tag], kind="baseline")
-    baselines = [storage.get_ifc_model(i) for i in base_ids]
-    baselines = [b for b in baselines if b and b.get("status") == "ok"]
-    if not baselines:
-        st.error("Bu pakette geçerli baseline yok.")
-        st.stop()
-
+# --- Çalıştır --------------------------------------------------------------
+st.subheader("3. Çalıştır (üret + tam etiketle)")
+if st.button("✅ Tam etiketli dataset üret", type="primary"):
     bar = st.progress(0.0, text="başlatılıyor...")
-    log = st.empty()
-    logs: list[str] = []
-    total_nodes = 0
-    n_ok = 0
-    t0 = time.time()
+    log = st.empty(); logs: list[str] = []; t0 = time.time()
 
-    for k, b in enumerate(baselines):
-        gp = b.get("graph_path")
-        if not gp or not Path(gp).exists():
-            logs.append(f"  ⚠️ {Path(b['file_path']).stem}: graph yok, atlandı")
-            continue
-        try:
-            g = load_graph(gp)
-            nodes = list(g.nodes())
-            doc = {
-                "violated_id": b["id"],
-                "baseline_id": b["id"],
-                "source": "full_clean_label",
-                "all_clean": True,
-                "labels": [
-                    {
-                        "ifc_global_id": n,
-                        "category": "",
-                        "severity": "uygun",
-                        "status": "clean",       # eğitimde y=0
-                        "is_violation": False,
-                        "is_decoy": False,
-                        "attribute": None,
-                        "evidence": "Baseline garantili compliant — kesin temiz",
-                    }
-                    for n in nodes
-                ],
-            }
-            # labels.json'u baseline'ın yanına yaz
-            lab_path = Path(gp).with_name(Path(gp).name.replace(".graph.json",
-                                                                ".labels.json"))
-            lab_path.write_text(json.dumps(doc, indent=2, ensure_ascii=False),
-                                encoding="utf-8")
-            # DB'de labels_path güncelle (yoksa)
-            try:
-                with storage._conn() as c:
-                    c.execute("UPDATE ifc_models SET labels_path=? WHERE id=?",
-                              (str(lab_path), b["id"]))
-            except Exception:
-                pass
-            total_nodes += len(nodes)
-            n_ok += 1
-            logs.append(f"  ✓ {Path(b['file_path']).stem}: {len(nodes)} node temiz")
-        except Exception as e:
-            logs.append(f"  ✗ {Path(b['file_path']).stem}: {e}")
-        bar.progress((k + 1) / len(baselines))
-        if len(logs) % 5 == 0 or k == len(baselines) - 1:
+    def _cb(done, total, stem):
+        bar.progress(done / total, text=f"{done}/{total} · {stem}")
+        logs.append(f"  ✓ {stem}")
+        if len(logs) % 5 == 0 or done == total:
             log.code("\n".join(logs[-20:]))
 
+    try:
+        res = run_basic_batch(
+            tag, variants=int(variants), seed_start=int(seed_start),
+            params=params, register_in_db=True, progress_cb=_cb,
+            use_gpt=use_gpt, model=gpt_model,
+            full_label=True,   # ← HER node etiketlenir
+        )
+    except Exception as e:
+        st.exception(e); st.stop()
     bar.empty()
-    st.success(
-        f"🎉 {n_ok} baseline tam-temiz etiketlendi ({time.time()-t0:.1f}s). "
-        f"Toplam **{total_nodes}** node kesin negatif (y=0) olarak hazır."
-    )
+    st.success(f"🎉 Bitti — {time.time()-t0:.1f}s. {res['ok']} violated IFC.")
+    m = st.columns(4)
+    m[0].metric("Violated IFC", res["ok"])
+    m[1].metric("İhlal (y=1)", res["violations"])
+    m[2].metric("Hard negatif (y=0)", res["hard_negatives"])
+    m[3].metric("Kesin-temiz node (y=0)", res.get("clean_labeled", 0),
+                help="Tam etiketleme ile açıkça 'temiz' işaretlenen yapı node'ları")
+    gerrs = res.get("graph_errors", [])
+    if gerrs:
+        st.error(f"⚠️ {len(gerrs)} IFC'de graph hatası:")
+        for ge in gerrs[:5]:
+            st.caption(f"   • {ge}")
     st.caption(
-        "Sonraki: **GAT Eğitim** → aynı paketi seç → **'Baseline'ları dahil "
-        "et'** kutusunu İŞARETLE. Bu temiz baseline'lar negatif örnek olarak "
-        "eğitime girer, precision'ı yükseltir."
+        "Sonraki: GAT Eğitim → bu paketi seç → eğit. Her node kesin etiketli "
+        "(tam closed-world). 'Baseline'ları dahil et' opsiyonel — violated'lar "
+        "zaten tüm yapıyı temiz olarak içeriyor."
     )
 
-# --- Bilgi -----------------------------------------------------------------
-with st.expander("📖 Bu nasıl yardımcı olur?"):
+with st.expander("📖 Basic Injection'dan farkı"):
     st.markdown("""
-**Sorun:** Şu an eğitim sadece violated IFC'lerle yapılınca, modelin
-gördüğü tek 'normal' örnek o binaların ihlalsiz node'ları. Yeterince
-çeşitli normal görmeyince, şüpheli her şeye 'ihlal' demeye eğilimli →
-düşük precision (çok yanlış alarm).
+| | Basic Injection | Tam Etiketleme |
+|---|---|---|
+| Üretim | kapı + kolon ihlali | **aynı** |
+| Etiket | sadece değişen node'lar (ihlal + hard-neg) | **HER node** (+ tüm yapı 'clean') |
+| Closed-world | etiketsiz=negatif (varsayım) | **her node açık** (varsayım yok) |
 
-**Çözüm:** Garantili temiz baseline'ları da kesin-negatif olarak ekle.
-Model 'normal bina neye benzer'i çok daha geniş örnekle öğrenir →
-değişmiş-ama-uyumlu kapıları, uzak kolonları daha iyi 'normal' der →
-**precision artar, recall korunur.**
-
-**Closed-world geçerliliği:** Normalde 'etiketsiz = negatif' bir
-VARSAYIM (riskli). Ama sentetik baseline'da gerçekten ihlal YOK, o yüzden
-'hepsi temiz' demek bir varsayım değil, **bilinen gerçek**. Bu yüzden bu
-veride güvenli.
+Tam etiketleme, modele "bu duvar/döşeme/dokunulmamış kapı KESİN normal"
+sinyalini de açıkça verir. Baseline garantili compliant olduğundan bu
+güvenli. Sonuç: daha zengin negatif → daha iyi precision.
 """)
