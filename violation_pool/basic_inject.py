@@ -315,7 +315,8 @@ def run_basic_batch(dataset_tag: str, *, variants: int = 5, seed_start: int = 10
                     params: BasicParams | None = None,
                     register_in_db: bool = True, progress_cb=None,
                     use_gpt: bool = False, model: str | None = None,
-                    full_label: bool = False) -> dict:
+                    full_label: bool = False,
+                    method_label: str = "basicinj") -> dict:
     """dataset_tag'li tüm baseline'lara basic ihlal enjekte et (LLM'siz).
 
     Her baseline için `variants` adet farklı varyant üretir.
@@ -336,18 +337,22 @@ def run_basic_batch(dataset_tag: str, *, variants: int = 5, seed_start: int = 10
     total = len(baselines) * variants
     done = 0
 
+    _mlabel = "".join(c if c.isalnum() or c in "-_" else "_"
+                      for c in str(method_label).strip()) or "inj"
     for b in baselines:
         base_stem = Path(b["file_path"]).stem
+        # İsim: <yöntem>_<baseline>_violatedN → nasıl üretildiği belli
+        name_base = f"{_mlabel}_{base_stem}"
         for vi in range(variants):
             seed = seed_start + done
             out_id = str(uuid.uuid4())
             # İlk boş _violatedN
             n = 1
-            while (out_dir / f"{base_stem}_violated{n}.ifc").exists():
+            while (out_dir / f"{name_base}_violated{n}.ifc").exists():
                 n += 1
-            stem = f"{base_stem}_violated{n}"
+            stem = f"{name_base}_violated{n}"
             if (out_dir / f"{stem}.ifc").exists():
-                stem = f"{base_stem}_violated{n}_{out_id[:6]}"
+                stem = f"{name_base}_violated{n}_{out_id[:6]}"
             out_ifc = out_dir / f"{stem}.ifc"
             try:
                 r = inject_basic(b["file_path"], out_ifc, seed=seed, params=params,

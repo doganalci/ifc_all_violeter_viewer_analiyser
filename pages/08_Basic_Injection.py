@@ -112,6 +112,7 @@ if st.button("🚪 Basic injection başlat", type="primary"):
             tag, variants=int(variants), seed_start=int(seed_start),
             params=params, register_in_db=True, progress_cb=_cb,
             use_gpt=use_gpt, model=gpt_model,
+            method_label="basicinj",
         )
     except Exception as e:
         st.exception(e)

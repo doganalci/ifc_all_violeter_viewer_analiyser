@@ -99,6 +99,7 @@ if st.button("✅ Tam etiketli dataset üret", type="primary"):
             params=params, register_in_db=True, progress_cb=_cb,
             use_gpt=use_gpt, model=gpt_model,
             full_label=True,   # ← HER node etiketlenir
+            method_label="tametiket",
         )
     except Exception as e:
         st.exception(e); st.stop()
