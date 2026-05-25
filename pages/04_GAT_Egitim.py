@@ -123,6 +123,44 @@ diag[0].metric("Toplam violated", len(all_violated))
 diag[1].metric("Filtre sonrası", len(filtered))
 diag[2].metric("Graph'lı (eğitilebilir)", len(violated_entries))
 
+# Teşhis: filtre 0 verdiğinde nedenini sayıyla göster
+if chosen_tags is not None and (not filtered or not violated_entries):
+    with st.expander("🔬 Teşhis — neden boş?", expanded=True):
+        st.caption(f"Seçili etiket(ler): {chosen_tags}")
+        # ifc_ids_for_tags ne döndürdü?
+        st.write(f"• `ifc_ids_for_tags` bu etiket(ler) için "
+                 f"**{len(allowed)}** violated id döndürdü.")
+        # list_entries içinde bu id'ler var mı?
+        in_le = [e for e in all_violated if e["id"] in allowed]
+        st.write(f"• Bunların **{len(in_le)}** tanesi list_entries'te (status ok/partial).")
+        with_g = [e for e in in_le if e.get("graph_ok")]
+        st.write(f"• Bunların **{len(with_g)}** tanesinin graph.json dosyası mevcut.")
+        # Graph'ı eksik olanlardan örnek
+        no_g = [e for e in in_le if not e.get("graph_ok")]
+        if no_g:
+            st.warning(
+                f"⚠️ {len(no_g)} violated IFC'nin graph.json'ı YOK/bulunamıyor → "
+                "eğitilebilir değil. Basic Injection sırasında graph üretimi "
+                "başarısız olmuş olabilir."
+            )
+            for e in no_g[:5]:
+                st.caption(f"   • {e['name']} · {e['id'][:8]} · "
+                           f"graph_path={e.get('graph_path')}")
+        # list_entries'te HİÇ yoksa: tag eşleşmesi sorunu
+        if allowed and not in_le:
+            st.error(
+                "🔴 ifc_ids_for_tags id döndürdü ama bunlar list_entries'te yok. "
+                "Muhtemelen status != ok/partial. DB'de bu violated'ların "
+                "status'ünü kontrol et."
+            )
+        if not allowed:
+            st.error(
+                "🔴 ifc_ids_for_tags bu etiket için HİÇ violated bulamadı. "
+                "Violated IFC'lerin dataset_tag'ı (veya parent baseline'ın tag'ı) "
+                "seçtiğinle eşleşmiyor. Tablodaki sayı parent üzerinden geliyor "
+                "ama violated kaydının kendi tag'ı farklı olabilir."
+            )
+
 if not violated_entries:
     # Help the user figure out *why* the filter is empty.
     if not all_violated:

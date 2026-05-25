@@ -368,8 +368,10 @@ def run_basic_batch(dataset_tag: str, *, variants: int = 5, seed_start: int = 10
                     gp = out_dir / f"{stem}.graph.json"
                     ifc_graph.build_and_save(str(out_ifc), str(gp))
                     graph_path = str(gp)
-                except Exception:
+                except Exception as _ge:
                     graph_path = None
+                    results.setdefault("graph_errors", []).append(
+                        f"{stem}: {_ge}")
                 # DB — sadece ihlal varsa 'ok', yoksa yine 'ok' (negatifler de
                 # değerli, hard negative). status='ok' eğitim listesine girsin.
                 if register_in_db:
@@ -388,6 +390,8 @@ def run_basic_batch(dataset_tag: str, *, variants: int = 5, seed_start: int = 10
                         {**lab} for lab in doc["labels"]
                     ])
                 results["ok"] += 1
+                if graph_path:
+                    results["with_graph"] = results.get("with_graph", 0) + 1
                 results["violations"] += r["summary"]["n_violations"]
                 results["hard_negatives"] += r["summary"]["n_compliant_changes"]
                 results["items"].append({"stem": stem, **r["summary"]})

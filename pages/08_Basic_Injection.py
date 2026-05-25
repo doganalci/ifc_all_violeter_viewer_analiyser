@@ -122,11 +122,23 @@ if st.button("🚪 Basic injection başlat", type="primary"):
         f"🎉 Bitti — {dt:.1f}s (LLM yok, anlık). "
         f"**{res['ok']}** IFC üretildi, {res['err']} hata."
     )
-    m = st.columns(3)
+    m = st.columns(4)
     m[0].metric("Toplam violated IFC", res["ok"])
-    m[1].metric("İhlal etiketi (y=1)", res["violations"])
-    m[2].metric("Hard negative (y=0)", res["hard_negatives"],
+    m[1].metric("Graph'lı (eğitilebilir)", res.get("with_graph", 0),
+                help="Eğitim için graph.json gerekli — bu sayı düşükse sorun var")
+    m[2].metric("İhlal etiketi (y=1)", res["violations"])
+    m[3].metric("Hard negative (y=0)", res["hard_negatives"],
                 help="Değişti ama uyumlu — model bunları ihlal SANMAMALI")
+
+    # Graph üretim hataları (eğitilebilir 0 ise kritik)
+    gerrs = res.get("graph_errors", [])
+    if gerrs:
+        st.error(
+            f"⚠️ {len(gerrs)} IFC'de graph üretimi başarısız → bunlar EĞİTİLEMEZ. "
+            "İlk birkaç hata:"
+        )
+        for ge in gerrs[:5]:
+            st.caption(f"   • {ge}")
     st.caption(
         "Sonraki: **GAT Eğitim** → bu paketi seç → eğit. İhlal/hard-negative "
         "dengesi sayesinde model gerçek kuralı öğrenmek zorunda."
