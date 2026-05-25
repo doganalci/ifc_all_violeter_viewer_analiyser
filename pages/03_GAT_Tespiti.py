@@ -81,6 +81,40 @@ st.caption("Eğitilmiş Graph Attention Network ile node-level ihlal tespiti.")
 if entry is None:
     st.stop()
 
+# --- Üstte: Baseline'dan üretilen ihlalleri seç (sidebar'a bağlı değil) ----
+from ml.app.state import (
+    list_entries as _list_entries, violated_children as _violated_children,
+    get_dataset_root as _gdr,
+)
+_root0 = _gdr()
+with st.container():
+    st.markdown("### 📦 Baseline → ihlal seç (tespit için)")
+    _bl = _list_entries(_root0, kind="baseline", require_graph=True)
+    bc = st.columns([2, 3])
+    with bc[0]:
+        _bi = st.selectbox(
+            "Baseline",
+            options=[None] + list(range(len(_bl))),
+            format_func=lambda i: ("— sidebar seçimini kullan —" if i is None
+                                   else f"{_bl[i]['name']} · {_bl[i]['id'][:8]}"),
+            key="det_baseline",
+        )
+    if _bi is not None:
+        kids = _violated_children(_root0, _bl[_bi]["id"])
+        kids = [k for k in kids if k.get("graph_ok")]
+        with bc[1]:
+            if kids:
+                _ki = st.selectbox(
+                    f"İhlal ({len(kids)} adet)",
+                    options=list(range(len(kids))),
+                    format_func=lambda i: f"[{i+1}/{len(kids)}] {kids[i]['name']} · {kids[i]['id'][:8]}",
+                    key="det_violated",
+                )
+                entry = kids[_ki]   # tespit bu violated üzerinde yapılır
+            else:
+                st.warning("Bu baseline'dan graph'lı ihlal yok.")
+    st.divider()
+
 run_root = Path("runs")
 runs = _list_runs(run_root)
 if not runs:
