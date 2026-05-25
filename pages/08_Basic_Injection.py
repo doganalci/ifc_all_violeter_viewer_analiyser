@@ -57,6 +57,20 @@ tag = st.selectbox("📦 Dataset paketi", [t["tag"] for t in baseline_tags])
 
 # --- Parametreler ----------------------------------------------------------
 st.subheader("2. Parametreler")
+
+mode = st.radio(
+    "Üretim modu",
+    ["⚡ Kural tabanlı (hızlı, deterministik)", "🤖 GPT destekli (çeşitli, yavaş)"],
+    horizontal=True,
+    help="Kural: anlık, API yok. GPT: LLM plan önerir (daha çeşitli senaryo) "
+         "ama etiket YİNE kuralla ölçülür (ground truth dürüst kalır). "
+         "GPT modu API çağrısı yapar → yavaş + rate-limit riski.",
+)
+use_gpt = mode.startswith("🤖")
+gpt_model = "gpt-4o-mini"
+if use_gpt:
+    gpt_model = st.text_input("GPT modeli", value="gpt-4o-mini")
+
 c1, c2, c3 = st.columns(3)
 with c1:
     variants = st.number_input("🔁 Baseline başına varyant", 1, 50, 5)
@@ -97,6 +111,7 @@ if st.button("🚪 Basic injection başlat", type="primary"):
         res = run_basic_batch(
             tag, variants=int(variants), seed_start=int(seed_start),
             params=params, register_in_db=True, progress_cb=_cb,
+            use_gpt=use_gpt, model=gpt_model,
         )
     except Exception as e:
         st.exception(e)

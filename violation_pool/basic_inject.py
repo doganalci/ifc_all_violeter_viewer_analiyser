@@ -88,14 +88,57 @@ def _door_facing(door) -> tuple[float, float]:
     return (-ax[1], ax[0])
 
 
+def _gpt_plan(doors_info: list[dict], model: str, seed: int) -> dict | None:
+    """LLM'den kapı+kolon değişiklik planı iste (çeşitlilik için).
+
+    LLM SADECE plan önerir; ihlal etiketi yine kuralla ölçülür (ground
+    truth dürüst kalır). Plan formatı:
+      {"doors": {guid: new_width_m}, "columns": [{guid, distance_m, lateral_m}]}
+    """
+    try:
+        from .ifc_inject import _chat_with_retry
+        from ._json import _parse_json  # yoksa aşağıdaki fallback
+    except Exception:
+        from .ifc_inject import _chat_with_retry
+        import json as _json
+        def _parse_json(s):
+            try:
+                return _json.loads(s)
+            except Exception:
+                return {}
+    sys_prompt = (
+        "Sen bir erişilebilirlik test-senaryosu üreticisisin. Verilen "
+        "kapıların bazılarının genişliğini değiştir ve bazı kapıların önüne "
+        "kolon koy. ÇEŞİTLİLİK önemli: bazı değişiklikler standarda UYGUN "
+        "kalsın (≥0.90 m kapı, ≥1.20 m kolon mesafesi), bazıları İHLAL olsun. "
+        "Sadece JSON döndür:\n"
+        '{"doors": {"<guid>": <yeni_genişlik_m>}, '
+        '"columns": [{"guid": "<kapı_guid>", "distance_m": <m>, "lateral_m": <m>}]}'
+    )
+    user = "Kapılar:\n" + json.dumps(doors_info, ensure_ascii=False, indent=2)
+    try:
+        resp = _chat_with_retry(
+            model,
+            [{"role": "system", "content": sys_prompt},
+             {"role": "user", "content": user}],
+            temperature=0.7, response_format={"type": "json_object"},
+        )
+        return _parse_json(resp.choices[0].message.content or "")
+    except Exception as e:
+        print(f"[basic_inject] GPT plan hatası: {e}")
+        return None
+
+
 def inject_basic(baseline_ifc_path: str | Path, out_ifc_path: str | Path,
-                 *, seed: int = 0, params: BasicParams | None = None) -> dict:
-    """Baseline IFC'ye kuralsal kapı+kolon ihlali enjekte et.
+                 *, seed: int = 0, params: BasicParams | None = None,
+                 use_gpt: bool = False, model: str | None = None) -> dict:
+    """Baseline IFC'ye kapı+kolon ihlali enjekte et.
+
+    use_gpt=False (varsayılan): kuralsal, deterministik, hızlı.
+    use_gpt=True: LLM plan önerir (çeşitlilik), etiket yine kuralla ölçülür.
 
     Returns:
-        { "ifc_path", "labels": [ {ifc_global_id, category, severity,
-          is_violation, attribute, before, after, rule, evidence}, ... ],
-          "summary": {...} }
+        { "ifc_path", "labels": [...], "summary": {...} }
     """
     p = params or BasicParams()
     rng = random.Random(seed)
@@ -115,16 +158,34 @@ def inject_basic(baseline_ifc_path: str | Path, out_ifc_path: str | Path,
     doors = list(f.by_type("IfcDoor"))
     labels: list[dict] = []
 
+    # GPT modunda planı al
+    gpt = None
+    if use_gpt and doors:
+        info = [{"guid": d.GlobalId,
+                 "width_m": round(float(getattr(d, "OverallWidth", 0.9) or 0.9), 3),
+                 "name": getattr(d, "Name", "")}
+                for d in doors]
+        gpt = _gpt_plan(info, model or "gpt-4o-mini", seed)
+
     # --- 1) KAPI GENİŞLİĞİ ---------------------------------------------
-    n_mod = int(round(len(doors) * p.door_modify_ratio))
-    mod_doors = rng.sample(doors, min(n_mod, len(doors))) if doors else []
+    if gpt and isinstance(gpt.get("doors"), dict):
+        # GPT planı: hangi kapı hangi genişlik
+        gpt_doors = gpt["doors"]
+        mod_doors = [d for d in doors if d.GlobalId in gpt_doors]
+        _door_plan = {d.GlobalId: float(gpt_doors[d.GlobalId]) for d in mod_doors}
+    else:
+        n_mod = int(round(len(doors) * p.door_modify_ratio))
+        mod_doors = rng.sample(doors, min(n_mod, len(doors))) if doors else []
+        _door_plan = {}
+        for d in mod_doors:
+            if rng.random() < p.door_violation_ratio:
+                _door_plan[d.GlobalId] = round(rng.uniform(p.narrow_min, p.narrow_max), 3)
+            else:
+                _door_plan[d.GlobalId] = round(rng.uniform(p.compliant_min, p.compliant_max), 3)
+
     for d in mod_doors:
         before = float(getattr(d, "OverallWidth", 0.0) or 0.0)
-        make_violation = rng.random() < p.door_violation_ratio
-        if make_violation:
-            new_w = round(rng.uniform(p.narrow_min, p.narrow_max), 3)
-        else:
-            new_w = round(rng.uniform(p.compliant_min, p.compliant_max), 3)
+        new_w = round(float(_door_plan.get(d.GlobalId, before)), 3)
         d.OverallWidth = new_w
         is_vio = new_w < MIN_DOOR_WIDTH_M
         labels.append({
@@ -143,24 +204,38 @@ def inject_basic(baseline_ifc_path: str | Path, out_ifc_path: str | Path,
     # --- 2) KOLON YERLEŞTİRME ------------------------------------------
     if storey is not None and body_ctx is not None:
         from .ifc_inject import _add_column_obstruction
-        n_col = int(round(len(doors) * p.column_ratio))
-        col_doors = rng.sample(doors, min(n_col, len(doors))) if doors else []
-        for d in col_doors:
-            dx, dy = _door_world_xy(d)
-            nx, ny = _door_facing(d)
-            blocking = rng.random() < p.column_block_ratio
-            if blocking:
-                dist = rng.uniform(p.block_dist_min, p.block_dist_max)
-                lateral = rng.uniform(-0.15, 0.15)   # kapı hattında
-            else:
-                # ya uzak ya da yana kaçık
-                if rng.random() < 0.5:
-                    dist = rng.uniform(p.far_dist_min, p.far_dist_max)
+        door_by_guid = {d.GlobalId: d for d in doors}
+        # GPT planı varsa onu kullan; yoksa kuralsal
+        col_specs: list[tuple] = []   # (door, dist, lateral)
+        if gpt and isinstance(gpt.get("columns"), list):
+            for c in gpt["columns"]:
+                d = door_by_guid.get(c.get("guid"))
+                if d is None:
+                    continue
+                try:
+                    col_specs.append((d, float(c.get("distance_m", 0.5)),
+                                      float(c.get("lateral_m", 0.0))))
+                except (TypeError, ValueError):
+                    continue
+        else:
+            n_col = int(round(len(doors) * p.column_ratio))
+            col_doors = rng.sample(doors, min(n_col, len(doors))) if doors else []
+            for d in col_doors:
+                if rng.random() < p.column_block_ratio:
+                    dist = rng.uniform(p.block_dist_min, p.block_dist_max)
                     lateral = rng.uniform(-0.15, 0.15)
                 else:
-                    dist = rng.uniform(p.block_dist_min, p.block_dist_max)
-                    lateral = (1 if rng.random() < 0.5 else -1) * p.side_offset
-            # duvar boyu yön (lateral için)
+                    if rng.random() < 0.5:
+                        dist = rng.uniform(p.far_dist_min, p.far_dist_max)
+                        lateral = rng.uniform(-0.15, 0.15)
+                    else:
+                        dist = rng.uniform(p.block_dist_min, p.block_dist_max)
+                        lateral = (1 if rng.random() < 0.5 else -1) * p.side_offset
+                col_specs.append((d, dist, lateral))
+
+        for d, dist, lateral in col_specs:
+            dx, dy = _door_world_xy(d)
+            nx, ny = _door_facing(d)
             lx, ly = -ny, nx
             cx = dx + nx * dist + lx * lateral
             cy = dy + ny * dist + ly * lateral
@@ -238,7 +313,8 @@ def _labels_to_doc(ifc_id: str, baseline_id: str, labels: list[dict]) -> dict:
 
 def run_basic_batch(dataset_tag: str, *, variants: int = 5, seed_start: int = 1000,
                     params: BasicParams | None = None,
-                    register_in_db: bool = True, progress_cb=None) -> dict:
+                    register_in_db: bool = True, progress_cb=None,
+                    use_gpt: bool = False, model: str | None = None) -> dict:
     """dataset_tag'li tüm baseline'lara basic ihlal enjekte et (LLM'siz).
 
     Her baseline için `variants` adet farklı varyant üretir.
@@ -273,7 +349,8 @@ def run_basic_batch(dataset_tag: str, *, variants: int = 5, seed_start: int = 10
                 stem = f"{base_stem}_violated{n}_{out_id[:6]}"
             out_ifc = out_dir / f"{stem}.ifc"
             try:
-                r = inject_basic(b["file_path"], out_ifc, seed=seed, params=params)
+                r = inject_basic(b["file_path"], out_ifc, seed=seed, params=params,
+                                 use_gpt=use_gpt, model=model)
                 # labels.json
                 doc = _labels_to_doc(out_id, b["id"], r["labels"])
                 lab_path = out_dir / f"{stem}.labels.json"
