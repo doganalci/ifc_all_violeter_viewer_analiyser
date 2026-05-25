@@ -27,6 +27,7 @@ sys.path.insert(0, str(_ROOT))
 
 from ml.app.state import (
     folder_browser, get_dataset_root, list_entries, reader_for, set_dataset_root,
+    violated_children,
 )
 from ml.data.pyg_dataset import sample_to_data
 from ml.data.graph_loader import load_sample
@@ -79,16 +80,17 @@ st.subheader("1. Hangi veride test edeceğiz?")
 
 split_map = summary.get("ifc_ids", {})
 default_set = "test"
-choice_options = ["test (eğitimde görmedi)", "val", "train", "elle seç"]
+choice_options = ["test (eğitimde görmedi)", "val", "train", "baseline seç", "elle seç"]
 if not split_map.get("test"):
-    default_set = "elle seç"
-    choice_options = ["elle seç"]
+    default_set = "baseline seç"
+    choice_options = ["baseline seç", "elle seç"]
 choice = st.radio("Set", options=choice_options, horizontal=True,
                   index=choice_options.index({
                       "test": "test (eğitimde görmedi)",
                       "val": "val",
                       "train": "train",
-                  }.get(default_set, "elle seç")) if default_set != "elle seç" else 0)
+                  }.get(default_set, default_set)) if default_set in (
+                      "test", "val", "train") else 0)
 
 if choice == "test (eğitimde görmedi)":
     selected_ids: list[str] = list(split_map.get("test") or [])
@@ -96,6 +98,26 @@ elif choice == "val":
     selected_ids = list(split_map.get("val") or [])
 elif choice == "train":
     selected_ids = list(split_map.get("train") or [])
+elif choice == "baseline seç":
+    # Bir baseline seç → ondan üretilen TÜM ihlalleri test et
+    baselines = [e for e in list_entries(root, kind="baseline", require_graph=False)]
+    bvio = {b["id"]: [k for k in violated_children(root, b["id"]) if k["graph_ok"]]
+            for b in baselines}
+    baselines.sort(key=lambda b: (-len(bvio.get(b["id"], [])), b["name"]))
+    baselines = [b for b in baselines if bvio.get(b["id"])]
+    if not baselines:
+        st.warning("İhlali olan (graph'lı) baseline yok. Önce ihlal üret.")
+        st.stop()
+    bsel = st.selectbox(
+        "Baseline seç",
+        options=[b["id"] for b in baselines],
+        format_func=lambda i: next(
+            f"{b['name']} · {i[:8]} · {len(bvio[i])} ihlal"
+            for b in baselines if b["id"] == i),
+    )
+    selected_ids = [k["id"] for k in bvio.get(bsel, [])]
+    st.caption(f"`{next(b['name'] for b in baselines if b['id'] == bsel)}` "
+               f"baseline'ından {len(selected_ids)} ihlal test edilecek.")
 else:
     all_violated = [e for e in list_entries(root, kind="violated") if e["graph_ok"]]
     selected = st.multiselect(
