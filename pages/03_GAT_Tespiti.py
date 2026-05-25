@@ -89,19 +89,27 @@ from ml.app.state import (
 _root0 = _gdr()
 with st.container():
     st.markdown("### 📦 Baseline → ihlal seç (tespit için)")
-    _bl = _list_entries(_root0, kind="baseline", require_graph=True)
+    # Baseline'ı graph şartı OLMADAN listele: tespit violated child üzerinde
+    # yapılır (baseline'ın kendi graph'ı gerekmez). require_graph=True iken
+    # graph'sız baseline'lar gizleniyordu → ihlali olan baseline görünmüyordu.
+    _bl = _list_entries(_root0, kind="baseline", require_graph=False)
+    _bl_vio = {b["id"]: [k for k in _violated_children(_root0, b["id"])
+                         if k.get("graph_ok")] for b in _bl}
+    # En çok (tespit edilebilir) ihlali olan baseline üstte; ihlalsizleri en sonda
+    _bl.sort(key=lambda b: (-len(_bl_vio.get(b["id"], [])), b["name"]))
     bc = st.columns([2, 3])
     with bc[0]:
         _bi = st.selectbox(
             "Baseline",
             options=[None] + list(range(len(_bl))),
-            format_func=lambda i: ("— sidebar seçimini kullan —" if i is None
-                                   else f"{_bl[i]['name']} · {_bl[i]['id'][:8]}"),
+            format_func=lambda i: (
+                "— sidebar seçimini kullan —" if i is None
+                else f"{_bl[i]['name']} · {_bl[i]['id'][:8]} "
+                     f"· {len(_bl_vio.get(_bl[i]['id'], []))} ihlal"),
             key="det_baseline",
         )
     if _bi is not None:
-        kids = _violated_children(_root0, _bl[_bi]["id"])
-        kids = [k for k in kids if k.get("graph_ok")]
+        kids = _bl_vio.get(_bl[_bi]["id"], [])
         with bc[1]:
             if kids:
                 _ki = st.selectbox(
