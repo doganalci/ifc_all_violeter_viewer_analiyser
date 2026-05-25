@@ -110,16 +110,32 @@ if st.button("✅ Tam etiketli dataset üret", type="primary"):
     m[2].metric("Hard negatif (y=0)", res["hard_negatives"])
     m[3].metric("Kesin-temiz node (y=0)", res.get("clean_labeled", 0),
                 help="Tam etiketleme ile açıkça 'temiz' işaretlenen yapı node'ları")
+
+    # 0 üretildiyse NEDENİNİ göster — sessiz başarısızlığı kır
+    if res["ok"] == 0:
+        st.error(
+            f"🔴 HİÇ violated üretilemedi! ({res.get('err', 0)} hata). "
+            "İlk hataları aşağıda gör — inject_basic bu baseline'larda "
+            "çalışmıyor demektir."
+        )
+        _errs = [it for it in res.get("items", []) if "error" in it]
+        for it in _errs[:5]:
+            st.code(f"{it['stem']}\n  → {it['error']}", language="text")
+        if not _errs:
+            st.warning(
+                "Hata kaydı yok ama 0 üretildi — muhtemelen bu pakette "
+                "geçerli (status=ok) baseline yok ya da hepsi graph'sız. "
+                "Sentetik Üretim ile YENİ baseline üret, sonra burayı çalıştır."
+            )
     gerrs = res.get("graph_errors", [])
     if gerrs:
-        st.error(f"⚠️ {len(gerrs)} IFC'de graph hatası:")
+        st.error(f"⚠️ {len(gerrs)} IFC'de graph hatası (eğitilemez):")
         for ge in gerrs[:5]:
-            st.caption(f"   • {ge}")
-    st.caption(
-        "Sonraki: GAT Eğitim → bu paketi seç → eğit. Her node kesin etiketli "
-        "(tam closed-world). 'Baseline'ları dahil et' opsiyonel — violated'lar "
-        "zaten tüm yapıyı temiz olarak içeriyor."
-    )
+            st.code(ge, language="text")
+    if res["ok"] > 0:
+        st.caption(
+            "Sonraki: GAT Eğitim → bu paketi seç → eğit. Her node kesin etiketli."
+        )
 
 with st.expander("📖 Basic Injection'dan farkı"):
     st.markdown("""
