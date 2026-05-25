@@ -129,19 +129,47 @@ st.caption(
     "Solda baseline (temiz), sağda o ihlal. (Tek model incelemek için "
     "soldaki sidebar'ı kullan.)"
 )
-_baselines = _list_entries(root, kind="baseline", require_graph=True)
+# Baseline'ı graph şartı OLMADAN listele: baseline'ın 3D'si IFC'den gelir,
+# ihlal listesi de baseline'ın kendi graph'ına ihtiyaç duymaz. (require_graph
+# True iken graph'sız sentetik baseline'lar gizleniyordu → liste boş kalıyordu.)
+from ml.app.state import violated_children as _vchildren
+_baselines = _list_entries(root, kind="baseline", require_graph=False)
+# Sadece en az bir ihlali olan baseline'ları öne çıkar (gezilebilir olanlar);
+# yine de hiç ihlali olmayanları da en sona ekle ki baseline 3D'si görülebilsin.
+_vio_counts = {b["id"]: len(_vchildren(root, b["id"])) for b in _baselines}
+_baselines.sort(key=lambda b: (-_vio_counts.get(b["id"], 0), b["name"]))
 _bopts = [None] + list(range(len(_baselines)))
 _bsel = st.selectbox(
     "Baseline seç (ihlallerini gezmek için)",
     options=_bopts,
     index=0,
-    format_func=lambda i: ("— sidebar seçimini kullan —" if i is None
-                            else f"{_baselines[i]['name']} · {_baselines[i]['id'][:8]}"),
+    format_func=lambda i: (
+        "— sidebar seçimini kullan —" if i is None
+        else f"{_baselines[i]['name']} · {_baselines[i]['id'][:8]} "
+             f"· {_vio_counts.get(_baselines[i]['id'], 0)} ihlal"),
     key="mv_baseline_browse",
 )
 if _bsel is not None:
     # Baseline gezgini moduna geç — entry'yi seçilen baseline yap
     entry = _baselines[_bsel]
+    # Seçilen baseline'dan üretilen ihlalleri altta liste olarak göster
+    _kids = _vchildren(root, entry["id"])
+    if _kids:
+        import pandas as _pd
+        st.markdown(f"**📋 `{entry['name']}` baseline'ından üretilen "
+                    f"{len(_kids)} ihlal:**")
+        st.dataframe(
+            _pd.DataFrame([{
+                "#": i + 1,
+                "ihlal dosyası": k["name"],
+                "id": k["id"][:8],
+                "graph": "✓" if k.get("graph_ok") else "—",
+            } for i, k in enumerate(_kids)]),
+            hide_index=True, use_container_width=True, height=min(280, 60 + 35 * len(_kids)),
+        )
+        st.caption("Aşağıdan ◀▶ ile sırayla gez ya da açılır listeden seç.")
+    else:
+        st.info("Bu baseline'dan henüz ihlal üretilmemiş.")
 
 st.divider()
 st.caption(
