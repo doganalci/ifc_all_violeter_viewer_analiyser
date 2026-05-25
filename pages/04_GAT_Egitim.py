@@ -89,23 +89,31 @@ else:
     chosen_tags = None  # tag yoksa filtre uygulama
     st.caption("(Henüz dataset etiketi yok — tüm violated IFC'ler kullanılacak.)")
 
-# B) Pool filtresi — codex1 pipeline'da etiketleme yöntemine göre alt-filtre
+# B) Pool filtresi — SADECE codex1 LLM havuzları için, OPT-IN.
+# Default boş = filtre yok (basic_inject violated'ları pool_run_id=None
+# olduğu için tüm-pool-seçili default'u onları yanlışlıkla eliyordu).
 pools = reader_for(root).list_pool_runs()
 chosen_pools: list[str] | None = None
 if pools:
-    with st.expander("🔧 Pool_run filtresi (opsiyonel, codex1 ihlal havuzu)"):
+    with st.expander("🔧 Pool_run filtresi (opsiyonel — codex1 LLM havuzu, "
+                     "boş bırak = TÜM violated dahil)"):
+        st.caption(
+            "⚠️ Bu filtre sadece codex1 LLM-havuzlu violated'lara uygulanır. "
+            "Basic Injection / kuralsal üretilenlerin pool'u yoktur — bu "
+            "filtreyi BOŞ bırak ki onlar da dahil olsun. Sadece belirli bir "
+            "LLM havuzuyla sınırlamak istersen seç."
+        )
         pool_df = pd.DataFrame(pools)[["id", "name", "n_violated", "method",
                                         "llm_model", "created_at"]]
         pool_df = pool_df.rename(columns={"id": "pool_id", "n_violated": "#IFC"})
         st.dataframe(pool_df, hide_index=True, use_container_width=True)
-        chosen_pools = st.multiselect(
-            "Kullanılacak pool_run(lar) — boş = hepsi",
+        picked = st.multiselect(
+            "Pool_run(lar) seç — BOŞ = filtre yok (önerilen)",
             options=[p["id"] for p in pools],
-            default=[p["id"] for p in pools],
+            default=[],   # boş default → filtre uygulanmaz
             format_func=lambda i: f"{next(p['name'] for p in pools if p['id']==i)} ({i[:8]})",
         )
-        if not chosen_pools:
-            chosen_pools = None
+        chosen_pools = picked or None
 
 # Filtreleri uygula
 all_violated = list_entries(root, kind="violated")
