@@ -359,12 +359,30 @@ def list_dataset_tags() -> list[dict]:
             ORDER BY tag, child.kind
             """
         ).fetchall()
+        # Eğitilebilir violated: status ok/partial + graph_path dolu
+        trainable_rows = c.execute(
+            """
+            SELECT
+              COALESCE(child.dataset_tag, parent.dataset_tag, '(etiketsiz)') AS tag,
+              COUNT(*) AS n
+            FROM ifc_models child
+            LEFT JOIN ifc_models parent ON child.parent_id = parent.id
+            WHERE child.kind='violated'
+              AND child.status IN ('ok','partial')
+              AND child.graph_path IS NOT NULL
+            GROUP BY tag
+            """
+        ).fetchall()
+    trainable = {r["tag"]: int(r["n"]) for r in trainable_rows}
     out: dict[str, dict] = {}
     for r in rows:
         out.setdefault(r["tag"], {"tag": r["tag"], "baseline": 0, "violated": 0,
-                                  "imported": 0, "total": 0})
+                                  "imported": 0, "total": 0, "eğitilebilir": 0})
         out[r["tag"]][r["kind"]] = int(r["n"])
         out[r["tag"]]["total"] += int(r["n"])
+    for tag, n in trainable.items():
+        if tag in out:
+            out[tag]["eğitilebilir"] = n
     return list(out.values())
 
 

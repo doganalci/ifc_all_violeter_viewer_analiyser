@@ -103,7 +103,11 @@ all_tags = _storage.list_dataset_tags()  # [{tag, baseline, violated, total}, ..
 if all_tags:
     st.caption("**📦 Dataset etiketleri** — Sentetik Üretim ile veya pipeline'ın "
                 "verdiği etiketlere göre paket seçimi. Çoklu seçilebilir.")
-    tags_df = pd.DataFrame(all_tags)[["tag", "baseline", "violated", "total"]]
+    _cols = ["tag", "baseline", "violated", "eğitilebilir", "total"]
+    _cols = [c for c in _cols if c in pd.DataFrame(all_tags).columns]
+    tags_df = pd.DataFrame(all_tags)[_cols]
+    st.caption("💡 **eğitilebilir** = status ok/partial + graph'lı violated. "
+               "Bu sütun 0 olan paketleri seçme (eski başarısız enjeksiyon).")
     tag_cols = st.columns([3, 2])
     with tag_cols[0]:
         st.dataframe(tags_df, hide_index=True, use_container_width=True)
@@ -172,6 +176,28 @@ if chosen_tags is not None and (not filtered or not violated_entries):
                  f"**{len(allowed)}** violated id döndürdü.")
         # list_entries içinde bu id'ler var mı?
         in_le = [e for e in all_violated if e["id"] in allowed]
+        # Status dağılımı — invalid (eski başarısız run) tespiti için
+        try:
+            import sqlite3 as _sq
+            _db = str(Path(root).expanduser() / "violation_pool.sqlite")
+            _c = _sq.connect(f"file:{_db}?mode=ro", uri=True)
+            _ph = ",".join("?" * len(allowed)) if allowed else "''"
+            _rows = _c.execute(
+                f"SELECT status, COUNT(*) FROM ifc_models WHERE id IN ({_ph}) "
+                "GROUP BY status", list(allowed) or [""]
+            ).fetchall()
+            _c.close()
+            _stat = {r[0]: r[1] for r in _rows}
+            st.write(f"• Bu id'lerin DB status dağılımı: **{_stat}**")
+            if _stat.get("invalid", 0) > 0:
+                st.error(
+                    f"🔴 {_stat['invalid']} tanesi `status='invalid'` — bunlar "
+                    "ESKİ BAŞARISIZ enjeksiyondan (API key bozukken applied=0). "
+                    "Eğitilemezler. **Basic Injection ile YENİ bir paket üret** "
+                    "(status='ok' olur) ve onu seç."
+                )
+        except Exception as _e:
+            st.caption(f"(status sorgusu atlandı: {_e})")
         st.write(f"• Bunların **{len(in_le)}** tanesi list_entries'te (status ok/partial).")
         with_g = [e for e in in_le if e.get("graph_ok")]
         st.write(f"• Bunların **{len(with_g)}** tanesinin graph.json dosyası mevcut.")
