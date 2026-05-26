@@ -216,10 +216,6 @@ if not test_entries:
     st.stop()
 
 # ---- Run inference ---------------------------------------------------------
-go = st.button("🧪 Testi çalıştır", type="primary")
-if not go:
-    st.stop()
-
 try:
     import torch
 except ImportError:
@@ -242,84 +238,94 @@ def _build_model(cfg, in_dim, num_edge_types):
     )
 
 
-device = cfg.resolve_device()
-progress = st.progress(0.0, text="Modeli yüklüyorum...")
+def _load_test_model(cfg, ckpt_path, test_entries):
+    device = cfg.resolve_device()
+    fs = load_sample(test_entries[0]["graph_path"],
+                     test_entries[0].get("labels_path"),
+                     ifc_id=test_entries[0]["id"])
+    fd = sample_to_data(fs)
+    net = int(fd.edge_type.max().item()) + 1 if fd.edge_type.numel() else 7
+    model = _build_model(cfg, fd.x.shape[1], max(net, 7)).to(device)
+    model.load_state_dict(torch.load(str(ckpt_path), map_location=device))
+    model.eval()
+    return model, device
 
-# Build one Data to infer feature_dim / num_edge_types.
-first_sample = load_sample(test_entries[0]["graph_path"],
-                           test_entries[0].get("labels_path"),
-                           ifc_id=test_entries[0]["id"])
-first_data = sample_to_data(first_sample)
-num_edge_types = int(first_data.edge_type.max().item()) + 1 if first_data.edge_type.numel() else 7
 
-model = _build_model(cfg, first_data.x.shape[1], max(num_edge_types, 7)).to(device)
-model.load_state_dict(torch.load(str(ckpt_path), map_location=device))
-model.eval()
+def _run_test(test_entries, cfg, ckpt_path, threshold):
+    import time as _time
+    model, device = _load_test_model(cfg, ckpt_path, test_entries)
+    rows, y_all, p_all, d_all, cat_all = [], [], [], [], []
+    progress = st.progress(0.0, text="Test çalışıyor...")
+    _t0 = _time.time()
+    with torch.no_grad():
+        for k, ent in enumerate(test_entries):
+            sample = load_sample(ent["graph_path"], ent.get("labels_path"),
+                                 ifc_id=ent["id"])
+            data = sample_to_data(sample).to(device)
+            logits = model(data.x, data.edge_index, data.edge_type)
+            probs = torch.sigmoid(logits).cpu().numpy()
+            preds = (probs >= threshold).astype(np.int64)
+            y = data.y.cpu().numpy()
+            decoy = data.decoy_mask.cpu().numpy()
+            res = evaluate_predictions(y, preds, decoy,
+                                       categories=data.categories, y_score=probs)
+            rows.append({
+                "ifc_id": ent["id"][:8], "name": ent["name"], "kind": ent["kind"],
+                "nodes": int(len(y)), "positives": int(res.n_positive),
+                "decoys": int(res.n_decoys),
+                "TP": int((preds & y).sum()),
+                "FP": int(res.n_predicted_positive - (preds & y).sum()),
+                "FN": int(res.n_positive - (preds & y).sum()),
+                "precision": round(res.precision, 3),
+                "recall": round(res.recall, 3),
+                "f1": round(res.f1, 3),
+                "decoy_fpr": round(res.decoy_fpr, 3),
+            })
+            y_all.append(y); p_all.append(preds); d_all.append(decoy)
+            cat_all.extend(data.categories)
+            progress.progress((k + 1) / len(test_entries),
+                              text=f"{k + 1}/{len(test_entries)} · {ent['name']}")
+    infer_seconds = _time.time() - _t0
+    progress.empty()
+    agg = evaluate_predictions(np.concatenate(y_all), np.concatenate(p_all),
+                               np.concatenate(d_all), categories=cat_all)
+    return agg, rows, infer_seconds
 
-rows: list[dict] = []
-per_ifc_payload: list[dict] = []
-y_all, p_all, d_all = [], [], []
-cat_all: list = []
 
-with torch.no_grad():
-    for k, ent in enumerate(test_entries):
-        sample = load_sample(ent["graph_path"], ent.get("labels_path"),
-                             ifc_id=ent["id"])
-        data = sample_to_data(sample).to(device)
-        logits = model(data.x, data.edge_index, data.edge_type)
-        probs = torch.sigmoid(logits).cpu().numpy()
-        preds = (probs >= threshold).astype(np.int64)
-        y = data.y.cpu().numpy()
-        decoy = data.decoy_mask.cpu().numpy()
-        res = evaluate_predictions(
-            y, preds, decoy,
-            categories=data.categories,
-            y_score=probs,
-        )
-        rows.append({
-            "ifc_id": ent["id"][:8],
-            "name": ent["name"],
-            "kind": ent["kind"],
-            "nodes": int(len(y)),
-            "positives": int(res.n_positive),
-            "decoys": int(res.n_decoys),
-            "TP": int((preds & y).sum()),
-            "FP": int(res.n_predicted_positive - (preds & y).sum()),
-            "FN": int(res.n_positive - (preds & y).sum()),
-            "precision": round(res.precision, 3),
-            "recall": round(res.recall, 3),
-            "f1": round(res.f1, 3),
-            "decoy_fpr": round(res.decoy_fpr, 3),
-        })
-        per_ifc_payload.append({
-            "ifc_id": ent["id"],
-            "name": ent["name"],
-            "metrics": res.to_dict(),
-        })
-        y_all.append(y)
-        p_all.append(preds)
-        d_all.append(decoy)
-        cat_all.extend(data.categories)
-        progress.progress((k + 1) / len(test_entries),
-                          text=f"{k + 1}/{len(test_entries)}  ·  {ent['name']}")
+go = st.button("🧪 Testi çalıştır", type="primary")
+if go:
+    agg, rows, infer_s = _run_test(test_entries, cfg, ckpt_path, threshold)
+    st.session_state["gt_res"] = {
+        "agg": agg, "rows": rows, "infer_seconds": infer_s,
+        "meta": {"run": run.name, "set": str(choice), "threshold": threshold,
+                 "n": len(test_entries)},
+    }
 
-progress.empty()
+# Sonuçlar session_state'te tutulur → rapor/indirme butonları ekranı sıfırlamaz.
+_R = st.session_state.get("gt_res")
+if not _R:
+    st.info("Yukarıdan **🧪 Testi çalıştır**'a bas. Sonuçlar ekranda kalır; "
+            "rapor ve indirme butonları sonucu SIFIRLAMAZ.")
+    st.stop()
 
-# ---- Aggregate -------------------------------------------------------------
-s_all_concat = []
-for r in rows:
-    pass  # skor toplamı aşağıda her IFC için ayrıca tutuluyor
-# y_score aggregate için per-IFC döngüsünde toplayalım
-# (zaten preds threshold ile alındı; AUC için raw probs lazım)
-# Bu yüzden toplu evaluate'te y_score=None — AUC olmaz.
-# Bunun yerine her IFC'de ayrı ayrı AUC hesaplandı (res.auc_roc satır altında).
+agg = _R["agg"]
+rows = _R["rows"]
+_meta = _R["meta"]
+if (_meta["run"] != run.name or _meta["set"] != str(choice)
+        or _meta["threshold"] != threshold):
+    st.warning(
+        f"⚠️ Ekrandaki sonuç ÖNCEKİ seçime ait (run={_meta['run']}, "
+        f"set={_meta['set']}, eşik={_meta['threshold']}). Güncellemek için "
+        "tekrar **Testi çalıştır**.")
 
-agg = evaluate_predictions(
-    np.concatenate(y_all),
-    np.concatenate(p_all),
-    np.concatenate(d_all),
-    categories=cat_all,
-)
+# ⏱ Süre
+_isec = _R.get("infer_seconds", 0.0)
+_n = max(_meta.get("n", 1), 1)
+st.markdown("**⏱ Test süresi**")
+_tc = st.columns(3)
+_tc[0].metric("Toplam test", f"{_isec:.2f} s")
+_tc[1].metric("IFC başına", f"{_isec / _n * 1000:.1f} ms")
+_tc[2].metric("Test edilen IFC", _n)
 
 st.subheader("Toplu sonuç")
 c1, c2, c3, c4 = st.columns(4)
@@ -413,12 +419,15 @@ with st.expander("❌ En kötü 5 IFC"):
 st.subheader("📄 Test raporu (PDF)")
 import datetime as _dt
 _set_label = choice
+st.caption("PDF, `predictions/` klasörüne ve arşiv kopyası olarak "
+           "`data/reports/` altına kaydedilir.")
 _meta_lines = [
     f"Run: {run.name}",
     f"Tarih: {_dt.datetime.now():%Y-%m-%d %H:%M}",
     f"Test seti: {_set_label}",
     f"Karar eşiği: {threshold}",
-    f"Test edilen IFC: {len(test_entries)}",
+    f"Test edilen IFC: {_meta.get('n')}",
+    f"Test süresi: {_isec:.2f} s  ({_isec / _n * 1000:.1f} ms/IFC)",
     f"Pozitif örnek: {agg.n_positive}   Tahmin pozitif: {agg.n_predicted_positive}",
     f"Decoy: {agg.n_decoys}",
 ]
@@ -436,12 +445,9 @@ if st.button("📄 PDF rapor üret"):
             per_ifc_rows=df.to_dict("records"), per_category=_pc,
         )
         if _pdf:
-            st.success(f"Üretildi: {_pdf}")
-            with open(_pdf, "rb") as f:
-                st.download_button("📥 PDF indir", f, file_name=Path(_pdf).name,
-                                   mime="application/pdf")
+            st.session_state["gt_pdf"] = str(_pdf)
             log_operation("gat_test", paket=str(_set_label),
-                          adet=len(test_entries),
+                          adet=_meta.get("n"),
                           ozet=f"F1={agg.f1:.3f} P={agg.precision:.3f} "
                                f"R={agg.recall:.3f}",
                           parametreler=f"run={run.name} threshold={threshold}")
@@ -450,12 +456,21 @@ if st.button("📄 PDF rapor üret"):
     except Exception as e:
         st.error(f"Hata: {e}")
 
+# Üretilmiş PDF'i kalıcı göster (indirme butonu ekranı sıfırlamaz)
+_pdfp = st.session_state.get("gt_pdf")
+if _pdfp and Path(_pdfp).exists():
+    st.success(f"📄 Rapor kaydedildi: `{_pdfp}`  ·  kopya: `data/reports/`")
+    with open(_pdfp, "rb") as f:
+        st.download_button("📥 PDF indir", f, file_name=Path(_pdfp).name,
+                           mime="application/pdf")
+
 # ---- Export ----------------------------------------------------------------
 st.subheader("Sonuçları dışa aktar")
 out_dir = Path("predictions") / run.name
 if st.button("📤 JSON'ları yaz (viewer'a beslemek için)"):
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Re-run a quick pass to write per-IFC predictions in viewer format.
+    # Modeli yeniden kur (sonuçlar session_state'te ama model değil).
+    model, device = _load_test_model(cfg, ckpt_path, test_entries)
     with torch.no_grad():
         for ent in test_entries:
             sample = load_sample(ent["graph_path"], ent.get("labels_path"),

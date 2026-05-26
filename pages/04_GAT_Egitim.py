@@ -593,6 +593,19 @@ if start:
     st.success("✅ Eğitim tamamlandı.")
     st.write(f"En iyi val F1: **{summary['best_val_f1']:.3f}** @ epoch {summary['best_epoch']}")
 
+    # Süreler
+    _tim = summary.get("timing") or {}
+    if _tim:
+        st.markdown("**⏱ Süreler**")
+        tcol = st.columns(4)
+        tcol[0].metric("Toplam eğitim", f"{_tim.get('total_train_seconds', 0):.1f} s",
+                       f"{_tim.get('epochs_run', 0)} epoch")
+        tcol[1].metric("Epoch ortalama", f"{_tim.get('avg_epoch_seconds', 0):.2f} s")
+        tcol[2].metric("Örnek başına (eğitim)", f"{_tim.get('per_sample_train_ms', 0):.1f} ms",
+                       help="Bir epoch'ta IFC başına ortalama")
+        tcol[3].metric("Test değerlendirme", f"{_tim.get('test_eval_seconds', 0):.2f} s",
+                       f"{_tim.get('per_sample_test_ms', 0):.1f} ms/IFC")
+
     def _render_split_metrics(t: dict | None, split_label: str):
         if not t:
             st.info(f"{split_label} split boş ya da hesaplanmadı.")

@@ -221,6 +221,7 @@ def run_training(
     no_improve = 0
     history: list[dict] = []
     stopped_early = False
+    _train_t0 = time.time()
 
     for epoch in range(1, cfg.epochs + 1):
         if should_stop and should_stop():
@@ -275,24 +276,50 @@ def run_training(
                 stopped_early = True
                 break
 
+    total_train_seconds = time.time() - _train_t0
+
     # Restore best weights for final evaluation on all three splits.
     ckpt = run_dir / "best.pt"
     if ckpt.exists():
         model.load_state_dict(torch.load(ckpt, map_location=device))
 
+    _t = time.time()
     train_eval_loader = DataLoader(ds[splits.train], batch_size=4, shuffle=False)
     train_res = (
         _eval(model, train_eval_loader, device, cfg.threshold).to_dict()
         if splits.train else None
     )
+    train_eval_seconds = time.time() - _t
+    _t = time.time()
     val_res = (
         _eval(model, val_loader, device, cfg.threshold).to_dict()
         if val_loader is not None else None
     )
+    val_eval_seconds = time.time() - _t
+    _t = time.time()
     test_res = (
         _eval(model, test_loader, device, cfg.threshold).to_dict()
         if test_loader is not None else None
     )
+    test_eval_seconds = time.time() - _t
+
+    _n_tr = len(splits.train) or 1
+    _n_te = len(splits.test) or 1
+    _epochs_run = len(history) or 1
+    timing = {
+        "total_train_seconds": round(total_train_seconds, 2),
+        "epochs_run": _epochs_run,
+        "avg_epoch_seconds": round(total_train_seconds / _epochs_run, 3),
+        "train_samples": len(splits.train),
+        "test_samples": len(splits.test),
+        # IFC (örnek) başına ortalama eğitim süresi (ms) — bir epoch'ta
+        "per_sample_train_ms": round(
+            (total_train_seconds / _epochs_run) / _n_tr * 1000, 2),
+        "test_eval_seconds": round(test_eval_seconds, 2),
+        "per_sample_test_ms": round(test_eval_seconds / _n_te * 1000, 2),
+        "train_eval_seconds": round(train_eval_seconds, 2),
+        "val_eval_seconds": round(val_eval_seconds, 2),
+    }
 
     summary = {
         "best_epoch": best_epoch,
@@ -302,6 +329,7 @@ def run_training(
         "test": test_res,
         "history": history,
         "stopped_early": stopped_early,
+        "timing": timing,
         "run_dir": str(run_dir),
         "ifc_ids": {
             "train": [ds[i].ifc_id for i in splits.train],
@@ -311,6 +339,11 @@ def run_training(
     }
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     _log(f"[train] done. best val F1={best_f1:.3f} @ epoch {best_epoch}")
+    _log(f"[train] süre: toplam={timing['total_train_seconds']}s · "
+         f"epoch_ort={timing['avg_epoch_seconds']}s · "
+         f"örnek/epoch={timing['per_sample_train_ms']}ms · "
+         f"test_değerlendirme={timing['test_eval_seconds']}s "
+         f"({timing['per_sample_test_ms']}ms/IFC)")
 
     # Deney defterine (data klasörü/experiments.xlsx) bir satır ekle — eğitimi
     # asla bozmadan, best-effort.

@@ -138,6 +138,7 @@ def record_run(run_dir: str | Path, *, home: Path | None = None) -> Path | None:
     n_train = len(ids.get("train") or [])
     n_val = len(ids.get("val") or [])
     n_test = len(ids.get("test") or [])
+    tim = summ.get("timing") or {}
     test_tp = _cm("test", "tp")
     test_fp = _cm("test", "fp")
     test_fn = _cm("test", "fn")
@@ -192,6 +193,12 @@ def record_run(run_dir: str | Path, *, home: Path | None = None) -> Path | None:
         "test_FP": test_fp,
         "test_FN": test_fn,
         "test_TN": test_tn,
+        # Süreler
+        "egitim_toplam_s": tim.get("total_train_seconds"),
+        "epoch_ort_s": tim.get("avg_epoch_seconds"),
+        "ornek_basina_egitim_ms": tim.get("per_sample_train_ms"),
+        "test_degerlendirme_s": tim.get("test_eval_seconds"),
+        "ornek_basina_test_ms": tim.get("per_sample_test_ms"),
     }
     home.mkdir(parents=True, exist_ok=True)
     try:

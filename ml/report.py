@@ -238,6 +238,7 @@ def build_report(run_dir: str | Path, dataset_root: str | None = None,
     def _m(split, key):
         return (summ.get(split) or {}).get(key)
 
+    tim = summ.get("timing") or {}
     out_path = Path(out_path) if out_path else (run_dir / "report.pdf")
     test_cm = (summ.get("test") or {}).get("confusion") or {}
 
@@ -271,6 +272,14 @@ def build_report(run_dir: str | Path, dataset_root: str | None = None,
                 f"mask_numeric/pset/type : {cfg.get('mask_numeric_features')}"
                 f" / {cfg.get('mask_pset_features')} / {cfg.get('mask_type_features')}",
                 f"rule_oracle        : {cfg.get('use_rule_oracle')}",
+                "",
+                "── SÜRELER ───────────────────────────────────────",
+                f"toplam eğitim       : {tim.get('total_train_seconds')} s "
+                f"({tim.get('epochs_run')} epoch)",
+                f"epoch ortalama      : {tim.get('avg_epoch_seconds')} s",
+                f"örnek başına eğitim : {tim.get('per_sample_train_ms')} ms/IFC (epoch içi)",
+                f"test değerlendirme  : {tim.get('test_eval_seconds')} s "
+                f"({tim.get('per_sample_test_ms')} ms/IFC)",
             ]
             _fig_text(pdf, "GAT Eğitim Raporu", head)
 
