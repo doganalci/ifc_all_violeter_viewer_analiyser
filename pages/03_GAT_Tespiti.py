@@ -406,6 +406,28 @@ cols[1].metric("FP", len(fp))
 cols[2].metric("FN", len(fn))
 cols[3].metric("Decoy → FP", len(decoy_fp))
 
+# ---- Hata görselleştirme: neyi yanlış bildi? -------------------------------
+st.markdown("### 🎯 Hata görselleştirme (model neyi yanlış bildi?)")
+st.caption(
+    "🟢 **TP** = doğru bulunan ihlal · 🔴 **FP** = yanlış alarm (ihlal değilken "
+    "ihlal dedi) · 🟠 **FN** = kaçırılan gerçek ihlal. Boş/gri = doğru reddedilen."
+)
+_tp_set, _fp_set, _fn_set = set(tp), set(fp) | set(decoy_fp), set(fn)
+if not (_fp_set or _fn_set):
+    st.success("🎉 Bu IFC'de hata yok — tüm tahminler doğru (FP=0, FN=0).")
+else:
+    ecols = st.columns(2)
+    # 3D: TP=green(path), FP=red(violation), FN=amber(decoy)
+    _render_3d(ecols[0], "Hatalar · IFC 3D",
+               entry["ifc_path"], _fp_set, _tp_set, _fn_set,
+               sel=selected_guid, key_suffix="err")
+    clicked_err = _render_graph(ecols[1], "Hatalar · grafik",
+                                g, _fp_set, _tp_set, _fn_set,
+                                sel=selected_guid, key_suffix="err")
+    if clicked_err and clicked_err != selected_guid:
+        set_selected_node(clicked_err)
+        st.rerun()
+
 # ---- Eleman (IFC tipi) bazında confusion matrix ----------------------------
 st.markdown("### IFC Eleman Tipine Göre Confusion Matrix")
 st.caption(
