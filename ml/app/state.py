@@ -46,6 +46,10 @@ def set_dataset_root(p: str) -> None:
     st.session_state[_DATASET_ROOT_KEY] = p
     # New root → existing list cache is stale.
     list_entries.clear()  # type: ignore[attr-defined]
+    try:
+        children_by_parent.clear()  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
 def get_selected_model_id() -> str | None:
@@ -134,12 +138,24 @@ def entry_by_id(root: str, model_id: str) -> dict | None:
     return None
 
 
+@st.cache_data(show_spinner=False)
+def children_by_parent(root: str) -> dict[str, list[dict]]:
+    """parent_id → violated çocuklar haritası (TEK geçişte, önbellekli).
+
+    Önceden `violated_children` her çağrıda tüm kayıtları tarıyordu; büyük
+    veri kümesinde (10k+ IFC) bu O(baseline × kayıt) → arayüz donuyordu.
+    Bunu tek geçişe indirir.
+    """
+    out: dict[str, list[dict]] = {}
+    for e in list_entries(root, kind=None):
+        if e["kind"] == "violated" and e.get("parent_id"):
+            out.setdefault(e["parent_id"], []).append(e)
+    return out
+
+
 def violated_children(root: str, baseline_id: str) -> list[dict]:
-    """Return all violated entries whose parent_id is the given baseline."""
-    return [
-        e for e in list_entries(root, kind=None)
-        if e["kind"] == "violated" and e.get("parent_id") == baseline_id
-    ]
+    """Verilen baseline'ın tüm violated çocukları (önbellekli haritadan, O(1))."""
+    return children_by_parent(root).get(baseline_id, [])
 
 
 @st.cache_data(show_spinner=False)
