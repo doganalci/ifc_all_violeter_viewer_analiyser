@@ -192,6 +192,128 @@ def build_eval_report(out_path: str | Path, *, title: str,
     return out_path
 
 
+def _draw_graph_ax(ax, g, node_colors: dict, title: str):
+    """NetworkX grafiğini matplotlib ekseninde çiz (PDF için statik)."""
+    import networkx as nx
+    pos = {}
+    for n, d in g.nodes(data=True):
+        x, y = d.get("x"), d.get("y")
+        if x is not None and y is not None:
+            pos[n] = (float(x), float(y))
+    if len(pos) < g.number_of_nodes():
+        try:
+            pos = nx.spring_layout(g, seed=0, k=0.6)
+        except Exception:
+            pos = {n: (i % 10, i // 10) for i, n in enumerate(g.nodes())}
+    for u, v in g.edges():
+        if u in pos and v in pos:
+            ax.plot([pos[u][0], pos[v][0]], [pos[u][1], pos[v][1]],
+                    color="#dddddd", lw=0.4, zorder=1)
+    nodes = [n for n in g.nodes() if n in pos]
+    ax.scatter([pos[n][0] for n in nodes], [pos[n][1] for n in nodes],
+               c=[node_colors.get(n, "#c8d2dc") for n in nodes],
+               s=22, zorder=2, edgecolors="#555", linewidths=0.3)
+    ax.set_title(title, fontsize=9)
+    ax.axis("off")
+
+
+def _infer_example(cfg: dict, ckpt_path, sample):
+    """Örnek sample üzerinde modeli çalıştır → (node_ids, probs)."""
+    import torch
+    from ml.data.pyg_dataset import sample_to_data
+    from ml.model.gat import GATNodeClassifier
+    from ml.model.hetero_gat import HeteroGATNodeClassifier
+    data = sample_to_data(sample)
+    net = int(data.edge_type.max().item()) + 1 if data.edge_type.numel() else 7
+    net = max(net, 7)
+    if cfg.get("model") == "hetero_gat":
+        m = HeteroGATNodeClassifier(in_dim=data.x.shape[1],
+                                    hidden_dim=cfg["hidden_dim"], num_edge_types=net,
+                                    heads=cfg["heads"], dropout=cfg["dropout"])
+    else:
+        m = GATNodeClassifier(in_dim=data.x.shape[1], hidden_dim=cfg["hidden_dim"],
+                              num_edge_types=net, edge_emb_dim=cfg["edge_emb_dim"],
+                              heads=cfg["heads"], dropout=cfg["dropout"])
+    m.load_state_dict(torch.load(str(ckpt_path), map_location="cpu"))
+    m.eval()
+    with torch.no_grad():
+        probs = torch.sigmoid(m(data.x, data.edge_index, data.edge_type)).numpy()
+    return list(data.node_ids), probs
+
+
+def _examples_pages(pdf, cfg: dict, ids: dict, id_entry: dict,
+                    threshold: float, ckpt):
+    """Her split'ten örnek(ler) için baseline | ihlal(gerçek) | tahmin görseli."""
+    import matplotlib.pyplot as plt
+    from ml.data.graph_loader import load_sample
+
+    plan = [("train", "EĞİTİM"), ("val", "VALIDATION"),
+            ("test", "TEST"), ("test", "TEST")]
+    used = set()
+    picks = []
+    for split, lab in plan:
+        for i in ids.get(split, []) or []:
+            e = id_entry.get(i)
+            if (e and e.kind == "violated" and i not in used
+                    and e.graph_path and e.graph_path.exists()):
+                picks.append((lab, e)); used.add(i); break
+
+    for lab, e in picks:
+        try:
+            sample = load_sample(str(e.graph_path),
+                                 str(e.labels_path) if e.labels_path else None,
+                                 ifc_id=e.id)
+            true_set = {gid for gid, y in sample.y.items() if y == 1}
+            decoy = set(sample.decoy_guids)
+            node_ids, probs = _infer_example(cfg, ckpt, sample)
+            pred_set = {node_ids[j] for j, p in enumerate(probs) if p >= threshold}
+            tp = pred_set & true_set
+            fp = pred_set - true_set
+            fn = true_set - pred_set
+
+            # Renk haritaları
+            true_colors = {g: "#e74c3c" for g in true_set}
+            true_colors.update({g: "#f1c40f" for g in decoy})
+            pred_colors = {}
+            for g in tp: pred_colors[g] = "#27ae60"
+            for g in fp: pred_colors[g] = "#e74c3c"
+            for g in fn: pred_colors[g] = "#e67e22"
+
+            # Baseline grafiği (parent)
+            base_g = None
+            parent = id_entry.get(e.parent_id) if e.parent_id else None
+            if parent and parent.graph_path and parent.graph_path.exists():
+                try:
+                    base_g = load_sample(str(parent.graph_path), None,
+                                         ifc_id=parent.id).graph
+                except Exception:
+                    base_g = None
+
+            fig = plt.figure(figsize=(11.69, 5.2))  # A4 yatay
+            fig.suptitle(f"[{lab}] {e.name}", fontsize=12, weight="bold")
+            ax1 = fig.add_subplot(1, 3, 1)
+            if base_g is not None:
+                _draw_graph_ax(ax1, base_g, {}, "Baseline (temiz)")
+            else:
+                ax1.text(0.5, 0.5, "baseline grafiği yok", ha="center")
+                ax1.axis("off")
+            ax2 = fig.add_subplot(1, 3, 2)
+            _draw_graph_ax(ax2, sample.graph, true_colors,
+                           f"İhlal — gerçek (kırmızı={len(true_set)}, sarı=decoy)")
+            ax3 = fig.add_subplot(1, 3, 3)
+            _draw_graph_ax(ax3, sample.graph, pred_colors,
+                           f"Tahmin (yeşil=TP {len(tp)}, kırmızı=FP {len(fp)}, "
+                           f"turuncu=FN {len(fn)})")
+            fig.text(0.5, 0.03,
+                     f"gerçek ihlal={len(true_set)} · model tahmini={len(pred_set)} · "
+                     f"TP={len(tp)} FP={len(fp)} FN={len(fn)}",
+                     ha="center", fontsize=9)
+            pdf.savefig(fig)
+            plt.close(fig)
+        except Exception:
+            continue
+
+
 def build_report(run_dir: str | Path, dataset_root: str | None = None,
                  out_path: str | Path | None = None) -> Path | None:
     """run_dir'deki config+summary'den tek PDF rapor üret. Hata olursa None."""
@@ -216,6 +338,7 @@ def build_report(run_dir: str | Path, dataset_root: str | None = None,
     pkg_counts: dict[str, dict] = {}
     sample_names: dict[str, list[str]] = {"baseline": [], "violated": []}
     used_pkgs: list[str] = []
+    id_entry: dict = {}
     try:
         id_pkg, id_entry = _ifc_id_to_pkg(dataset_root)
         used = set()
@@ -339,6 +462,16 @@ def build_report(run_dir: str | Path, dataset_root: str | None = None,
                 ["", "── İHLAL örnekleri ──"] + \
                 [f"  {n}" for n in sample_names.get("violated", [])[:15]]
             _fig_text(pdf, "Örnek İsimleri (soy ağacı)", ex_lines)
+
+            # 7) Görsel örnekler: train/val/test'ten örnekler — baseline |
+            # ihlal(gerçek) | model tahmini. Modeli örnekler üzerinde çalıştırır.
+            try:
+                ckpt = run_dir / "best.pt"
+                if ckpt.exists() and id_entry:
+                    _examples_pages(pdf, cfg, ids, id_entry,
+                                    float(cfg.get("threshold", 0.5)), ckpt)
+            except Exception:
+                pass
     except Exception:
         return None
 
