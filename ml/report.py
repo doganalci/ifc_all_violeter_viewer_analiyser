@@ -126,6 +126,72 @@ def _dist_fig(pdf, split_counts: dict[str, int], pkg_counts: dict[str, dict],
     plt.close(fig)
 
 
+def build_eval_report(out_path: str | Path, *, title: str,
+                      meta_lines: list[str], agg: dict,
+                      per_ifc_rows: list[dict] | None = None,
+                      per_category: dict | None = None) -> Path | None:
+    """GAT Test (toplu değerlendirme) için tek PDF rapor üret.
+
+    agg: EvalResult.to_dict() benzeri (f1/precision/recall/.../confusion).
+    per_ifc_rows: her IFC için {name,f1,TP,FP,FN,...} satırları (en kötüler).
+    per_category: {'f1':{...},'precision':{...},'recall':{...},'support':{...}}
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        from matplotlib.backends.backend_pdf import PdfPages
+    except Exception:
+        return None
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _g(k):
+        return agg.get(k)
+
+    try:
+        with PdfPages(out_path) as pdf:
+            _fig_text(pdf, title, meta_lines)
+            mrows = [[
+                "değerlendirme",
+                f"{_g('f1'):.3f}" if _g('f1') is not None else "-",
+                f"{_g('precision'):.3f}" if _g('precision') is not None else "-",
+                f"{_g('recall'):.3f}" if _g('recall') is not None else "-",
+                f"{_g('balanced_accuracy'):.3f}" if _g('balanced_accuracy') is not None else "-",
+                f"{_g('mcc'):+.3f}" if _g('mcc') is not None else "-",
+                f"{_g('auc_roc'):.3f}" if _g('auc_roc') is not None else "-",
+                f"{_g('decoy_fpr'):.3f}" if _g('decoy_fpr') is not None else "-",
+            ]]
+            _table_fig(pdf, "Değerlendirme Metrikleri",
+                       ["set", "F1", "P", "R", "Bal.Acc", "MCC", "AUC", "decoy_FPR"],
+                       mrows)
+            _confusion_fig(pdf, {"değerlendirme": {"confusion": agg.get("confusion") or {}}})
+            if per_category and per_category.get("f1"):
+                f1 = per_category.get("f1") or {}
+                pr = per_category.get("precision") or {}
+                rc = per_category.get("recall") or {}
+                sup = per_category.get("support") or {}
+                crows = [[c, f"{pr.get(c,0):.3f}", f"{rc.get(c,0):.3f}",
+                          f"{f1.get(c,0):.3f}", sup.get(c, 0)] for c in sorted(f1)]
+                _table_fig(pdf, "Kategori Bazında Performans",
+                           ["kategori", "P", "R", "F1", "destek"], crows)
+            if per_ifc_rows:
+                rows = [[r.get("name", "")[:30], r.get("f1"), r.get("TP"),
+                         r.get("FP"), r.get("FN")] for r in per_ifc_rows[:25]]
+                _table_fig(pdf, "En kötü IFC'ler (F1 artan)",
+                           ["IFC", "F1", "TP", "FP", "FN"], rows)
+    except Exception:
+        return None
+    # data/reports arşiv kopyası
+    try:
+        rep_dir = data_home() / "reports"
+        rep_dir.mkdir(parents=True, exist_ok=True)
+        import shutil
+        shutil.copyfile(out_path, rep_dir / out_path.name)
+    except Exception:
+        pass
+    return out_path
+
+
 def build_report(run_dir: str | Path, dataset_root: str | None = None,
                  out_path: str | Path | None = None) -> Path | None:
     """run_dir'deki config+summary'den tek PDF rapor üret. Hata olursa None."""

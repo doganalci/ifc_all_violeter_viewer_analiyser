@@ -474,9 +474,18 @@ def run_basic_batch(dataset_tag: str, *, variants: int = 5, seed_start: int = 10
     # Veri kümesi defterini (data klasörü/datasets.xlsx) güncelle — best-effort.
     if register_in_db:
         try:
-            from ml.tracking import rebuild_dataset_registry
+            from ml.tracking import rebuild_dataset_registry, log_operation
             from paths import data_home
             rebuild_dataset_registry(str(data_home()))
+            _mode = ("tam_etiketleme" if full_label else "ihlal_uretim")
+            log_operation(f"{_mode} ({method_label})", paket=dataset_tag,
+                          adet=results.get("ok", 0),
+                          ozet=f"ihlal={results.get('violations',0)} "
+                               f"hard_neg={results.get('hard_negatives',0)} "
+                               f"clean={results.get('clean_labeled',0)}",
+                          parametreler=f"variants={variants} seed_start={seed_start} "
+                                       f"door_only={getattr(params,'door_only',False)} "
+                                       f"dim={getattr(params,'door_dim_mode','width')}")
         except Exception:
             pass
     return results

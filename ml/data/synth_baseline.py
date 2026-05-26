@@ -273,9 +273,13 @@ def generate_batch(n: int, out_dir: str | Path,
     # Veri kümesi defterini güncelle — best-effort (üretimi bozmaz).
     if register_in_db:
         try:
-            from ml.tracking import rebuild_dataset_registry
+            from ml.tracking import rebuild_dataset_registry, log_operation
             from paths import data_home
             rebuild_dataset_registry(str(data_home()))
+            log_operation("sentetik_uretim", paket=dataset_tag or "",
+                          adet=len(results),
+                          ozet=f"{len(results)} baseline üretildi",
+                          parametreler=f"seed_start={seed_start}")
         except Exception:
             pass
     return results

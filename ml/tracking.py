@@ -202,6 +202,34 @@ def record_run(run_dir: str | Path, *, home: Path | None = None) -> Path | None:
 
 
 # --------------------------------------------------------------------------- #
+# 1b) İşlem günlüğü — yaptığımız her işlem bir satır
+# --------------------------------------------------------------------------- #
+
+def log_operation(operation: str, *, paket: str = "", adet=None,
+                  ozet: str = "", parametreler: str = "",
+                  home: Path | None = None) -> Path | None:
+    """operations_log.xlsx'e bir işlem satırı ekle (üretim/test/eğitim vb.).
+
+    Best-effort — hata olursa None döndürür, akışı bozmaz.
+    """
+    home = home or data_home()
+    home.mkdir(parents=True, exist_ok=True)
+    row = {
+        "zaman": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "islem": operation,
+        "paket (ana baseline)": paket,
+        "adet": adet if adet is not None else "",
+        "ozet": ozet,
+        "parametreler": parametreler,
+    }
+    try:
+        return _write_table([row], home / "operations_log.xlsx",
+                            sheet="islemler", append=True)
+    except Exception:
+        return None
+
+
+# --------------------------------------------------------------------------- #
 # 2) Veri kümesi defteri
 # --------------------------------------------------------------------------- #
 

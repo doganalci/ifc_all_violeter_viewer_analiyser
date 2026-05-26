@@ -116,6 +116,19 @@ else:
 
 st.divider()
 
+# ---- İşlem günlüğü ---------------------------------------------------------
+st.subheader("🗒️ İşlem günlüğü (operations)")
+st.caption("Üretim / ihlal / tam etiketleme / test gibi her işlem bir satır.")
+op = home / "operations_log.xlsx"
+df_op = _read_any(op, sheet="islemler") if op.exists() else _read_any(op)
+if df_op is not None and not df_op.empty:
+    st.dataframe(df_op, use_container_width=True, height=300)
+    _download(op, "📥 işlem günlüğü indir")
+else:
+    st.info("Henüz işlem kaydı yok. Üretim/test yapınca otomatik dolar.")
+
+st.divider()
+
 # ---- Veri kümesi defteri ---------------------------------------------------
 st.subheader("📦 Veri kümesi defteri (datasets)")
 st.caption(

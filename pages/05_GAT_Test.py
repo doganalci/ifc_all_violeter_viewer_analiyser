@@ -409,6 +409,47 @@ with st.expander("❌ En kötü 5 IFC"):
             f"·  decoy_fpr={r['decoy_fpr']}"
         )
 
+# ---- PDF rapor + işlem günlüğü --------------------------------------------
+st.subheader("📄 Test raporu (PDF)")
+import datetime as _dt
+_set_label = choice
+_meta_lines = [
+    f"Run: {run.name}",
+    f"Tarih: {_dt.datetime.now():%Y-%m-%d %H:%M}",
+    f"Test seti: {_set_label}",
+    f"Karar eşiği: {threshold}",
+    f"Test edilen IFC: {len(test_entries)}",
+    f"Pozitif örnek: {agg.n_positive}   Tahmin pozitif: {agg.n_predicted_positive}",
+    f"Decoy: {agg.n_decoys}",
+]
+_pc = {"f1": agg.per_category_f1, "precision": agg.per_category_precision,
+       "recall": agg.per_category_recall, "support": agg.per_category_support}
+if st.button("📄 PDF rapor üret"):
+    try:
+        from ml.report import build_eval_report
+        from ml.tracking import log_operation
+        _stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        _pdf = build_eval_report(
+            Path("predictions") / f"test_{run.name}_{_stamp}.pdf",
+            title=f"GAT Test Raporu — {run.name}",
+            meta_lines=_meta_lines, agg=agg.to_dict(),
+            per_ifc_rows=df.to_dict("records"), per_category=_pc,
+        )
+        if _pdf:
+            st.success(f"Üretildi: {_pdf}")
+            with open(_pdf, "rb") as f:
+                st.download_button("📥 PDF indir", f, file_name=Path(_pdf).name,
+                                   mime="application/pdf")
+            log_operation("gat_test", paket=str(_set_label),
+                          adet=len(test_entries),
+                          ozet=f"F1={agg.f1:.3f} P={agg.precision:.3f} "
+                               f"R={agg.recall:.3f}",
+                          parametreler=f"run={run.name} threshold={threshold}")
+        else:
+            st.error("Rapor üretilemedi (matplotlib kurulu mu?).")
+    except Exception as e:
+        st.error(f"Hata: {e}")
+
 # ---- Export ----------------------------------------------------------------
 st.subheader("Sonuçları dışa aktar")
 out_dir = Path("predictions") / run.name
