@@ -311,6 +311,16 @@ def run_training(
     }
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     _log(f"[train] done. best val F1={best_f1:.3f} @ epoch {best_epoch}")
+
+    # Deney defterine (data klasörü/experiments.xlsx) bir satır ekle — eğitimi
+    # asla bozmadan, best-effort.
+    try:
+        from ml.tracking import record_run
+        _rp = record_run(run_dir)
+        if _rp:
+            _log(f"[train] deney defterine eklendi: {_rp}")
+    except Exception as _te:
+        _log(f"[train] deney defteri yazılamadı (atlandı): {_te}")
     if test_res is not None:
         _log(f"[train] test: f1={test_res['f1']:.3f}  "
              f"P={test_res['precision']:.3f}  R={test_res['recall']:.3f}  "
