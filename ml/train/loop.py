@@ -321,6 +321,15 @@ def run_training(
             _log(f"[train] deney defterine eklendi: {_rp}")
     except Exception as _te:
         _log(f"[train] deney defteri yazılamadı (atlandı): {_te}")
+
+    # Detaylı PDF rapor üret (best-effort).
+    try:
+        from ml.report import build_report
+        _pdf = build_report(run_dir)
+        if _pdf:
+            _log(f"[train] PDF rapor üretildi: {_pdf}")
+    except Exception as _re:
+        _log(f"[train] PDF rapor üretilemedi (atlandı): {_re}")
     if test_res is not None:
         _log(f"[train] test: f1={test_res['f1']:.3f}  "
              f"P={test_res['precision']:.3f}  R={test_res['recall']:.3f}  "

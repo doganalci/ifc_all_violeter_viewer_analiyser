@@ -81,6 +81,41 @@ else:
 
 st.divider()
 
+# ---- Eğitim PDF raporları --------------------------------------------------
+st.subheader("📄 Eğitim raporları (PDF)")
+st.caption(
+    "Her eğitim sonunda otomatik üretilir (runs/<run>/report.pdf + "
+    "data/reports/). Aşağıdan seç, indir ya da yeniden üret."
+)
+_runs_root = Path("runs")
+_runs = sorted([p for p in _runs_root.iterdir()
+                if p.is_dir() and (p / "summary.json").exists()],
+               reverse=True) if _runs_root.exists() else []
+if _runs:
+    _rsel = st.selectbox("Run", _runs, format_func=lambda p: p.name)
+    rc1, rc2 = st.columns(2)
+    if rc1.button("🔄 PDF raporu (yeniden) üret"):
+        try:
+            from ml.report import build_report
+            pdf = build_report(_rsel, dataset_root=get_dataset_root())
+            if pdf:
+                st.success(f"Üretildi: {pdf}")
+            else:
+                st.error("Rapor üretilemedi (matplotlib kurulu mu?).")
+        except Exception as e:
+            st.error(f"Hata: {e}")
+    _pdf_path = _rsel / "report.pdf"
+    if _pdf_path.exists():
+        with open(_pdf_path, "rb") as f:
+            rc2.download_button("📥 PDF indir", f, file_name=f"{_rsel.name}_report.pdf",
+                                mime="application/pdf")
+    else:
+        rc2.caption("Bu run için henüz PDF yok — soldaki butonla üret.")
+else:
+    st.caption("Henüz eğitim run'ı yok.")
+
+st.divider()
+
 # ---- Veri kümesi defteri ---------------------------------------------------
 st.subheader("📦 Veri kümesi defteri (datasets)")
 st.caption(
