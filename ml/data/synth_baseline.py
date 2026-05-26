@@ -68,6 +68,9 @@ class SynthParams:
     wall_thickness: float = 0.20
     # Pencere eklensin mi? (sadece görsellik için)
     add_windows: bool = True
+    # Kapı-odaklı deney: oda/koridorun boş duvarlarına ek (uyumlu) kapılar.
+    # 0 = sadece 3 temel kapı. 5'e kadar ek kapı eklenebilir.
+    extra_doors: int = 0
 
 
 def _u(rng: random.Random, lo: float, hi: float, *, step: float = 0.05) -> float:
@@ -125,6 +128,30 @@ def make_spec(seed: int, params: SynthParams | None = None,
              "width": min(1.5, w2 - 0.2), "height": 1.4, "sill": 0.9,
              "offset": max(0.1, (l2 - 1.5) / 2.0), "is_exterior": True},
         ])
+
+    # Kapı-odaklı deney: boş duvarlara ek uyumlu kapılar ekle. Her aday
+    # (oda, kenar, duvar_uzunluğu); kapı duvara sığarsa eklenir. Hepsi
+    # mevzuata uygun (≥0.90 m genişlik, ≥2.00 m yükseklik) — ihlal değil.
+    if p.extra_doors and p.extra_doors > 0:
+        candidates = [
+            ("Oda1", "north", w1), ("Oda1", "south", w1),
+            ("Oda2", "north", w2), ("Oda2", "south", w2),
+            ("Koridor", "north", cw),
+        ]
+        added = 0
+        for rname, side, wall_len in candidates:
+            if added >= p.extra_doors:
+                break
+            dwx = _u(rng, p.door_w_min, p.door_w_max)
+            if dwx > wall_len - 0.30:        # duvara sığmıyorsa atla
+                continue
+            openings.append({
+                "room": rname, "side": side, "type": "door",
+                "width": dwx, "height": _u(rng, p.door_h_min, p.door_h_max),
+                "offset": max(0.1, (wall_len - dwx) / 2.0),
+                "is_exterior": True, "name": f"{rname}-Kapi-{side}",
+            })
+            added += 1
 
     return {
         "name": name or f"synth-two-room-{seed:05d}",

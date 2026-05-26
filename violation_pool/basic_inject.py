@@ -38,6 +38,7 @@ import ifcopenshell.util.placement
 
 # --- Standart eşikler (METRE) ---------------------------------------------
 MIN_DOOR_WIDTH_M = 0.90          # bunun altı ihlal
+MIN_DOOR_HEIGHT_M = 2.00         # bunun altı ihlal (kapı net yüksekliği)
 DOOR_CLEARANCE_M = 1.20          # kapı önü serbest mesafe
 COLUMN_SIZE_M = 0.30             # kolon kenar uzunluğu
 
@@ -54,6 +55,18 @@ class BasicParams:
     # Uyumlu ama değiştirilmiş kapı aralığı (m) — hard negative
     compliant_min: float = 0.92
     compliant_max: float = 1.15
+    # --- Kapı-odaklı deney: yükseklik ihlali + kolonları kapatma -----------
+    # Sadece kapı ihlali üret (kolon enjeksiyonunu tamamen kapat)
+    door_only: bool = False
+    # Hangi boyut ihlal edilsin: "width" | "height" | "both"
+    # "both" → her kapı için rastgele genişlik VEYA yükseklik
+    door_dim_mode: str = "width"
+    # İhlalli kısa kapı yüksekliği aralığı (m) — < 2.00
+    short_min: float = 1.70
+    short_max: float = 1.95
+    # Uyumlu ama değiştirilmiş yükseklik aralığı (m) — hard negative, ≥ 2.00
+    tall_min: float = 2.05
+    tall_max: float = 2.30
     # Kaç kapıya kolon konsun (oran)
     column_ratio: float = 0.6
     # Konan kolonların kaçı engelleyici (yakın+hatta) olsun
@@ -167,42 +180,67 @@ def inject_basic(baseline_ifc_path: str | Path, out_ifc_path: str | Path,
                 for d in doors]
         gpt = _gpt_plan(info, model or "gpt-4o-mini", seed)
 
-    # --- 1) KAPI GENİŞLİĞİ ---------------------------------------------
+    # --- 1) KAPI BOYUTU (genişlik ve/veya yükseklik) -------------------
+    # _door_plan: guid -> (attribute, new_value)
     if gpt and isinstance(gpt.get("doors"), dict):
-        # GPT planı: hangi kapı hangi genişlik
+        # GPT planı: hangi kapı hangi genişlik (GPT modu sadece genişlik)
         gpt_doors = gpt["doors"]
         mod_doors = [d for d in doors if d.GlobalId in gpt_doors]
-        _door_plan = {d.GlobalId: float(gpt_doors[d.GlobalId]) for d in mod_doors}
+        _door_plan = {d.GlobalId: ("OverallWidth", float(gpt_doors[d.GlobalId]))
+                      for d in mod_doors}
     else:
         n_mod = int(round(len(doors) * p.door_modify_ratio))
         mod_doors = rng.sample(doors, min(n_mod, len(doors))) if doors else []
         _door_plan = {}
         for d in mod_doors:
-            if rng.random() < p.door_violation_ratio:
-                _door_plan[d.GlobalId] = round(rng.uniform(p.narrow_min, p.narrow_max), 3)
+            # Hangi boyut? width / height / both(rastgele)
+            if p.door_dim_mode == "height":
+                dim = "height"
+            elif p.door_dim_mode == "both":
+                dim = "height" if rng.random() < 0.5 else "width"
             else:
-                _door_plan[d.GlobalId] = round(rng.uniform(p.compliant_min, p.compliant_max), 3)
+                dim = "width"
+            is_vio = rng.random() < p.door_violation_ratio
+            if dim == "height":
+                val = (rng.uniform(p.short_min, p.short_max) if is_vio
+                       else rng.uniform(p.tall_min, p.tall_max))
+                _door_plan[d.GlobalId] = ("OverallHeight", round(val, 3))
+            else:
+                val = (rng.uniform(p.narrow_min, p.narrow_max) if is_vio
+                       else rng.uniform(p.compliant_min, p.compliant_max))
+                _door_plan[d.GlobalId] = ("OverallWidth", round(val, 3))
 
     for d in mod_doors:
-        before = float(getattr(d, "OverallWidth", 0.0) or 0.0)
-        new_w = round(float(_door_plan.get(d.GlobalId, before)), 3)
-        d.OverallWidth = new_w
-        is_vio = new_w < MIN_DOOR_WIDTH_M
+        attr, new_v = _door_plan.get(d.GlobalId, ("OverallWidth", None))
+        if new_v is None:
+            continue
+        before = float(getattr(d, attr, 0.0) or 0.0)
+        new_v = round(float(new_v), 3)
+        setattr(d, attr, new_v)
+        if attr == "OverallHeight":
+            is_vio = new_v < MIN_DOOR_HEIGHT_M
+            rule = f"OverallHeight >= {MIN_DOOR_HEIGHT_M} m"
+            ev = (f"Kapı yüksekliği {new_v*100:.0f} cm "
+                  f"({'< 200 → İHLAL' if is_vio else '≥ 200 → uygun'})")
+        else:
+            is_vio = new_v < MIN_DOOR_WIDTH_M
+            rule = f"OverallWidth >= {MIN_DOOR_WIDTH_M} m"
+            ev = (f"Kapı genişliği {new_v*100:.0f} cm "
+                  f"({'< 90 → İHLAL' if is_vio else '≥ 90 → uygun'})")
         labels.append({
             "ifc_global_id": d.GlobalId,
             "category": "Kapı/Koridor",
             "severity": "kritik" if is_vio else "uygun",
             "is_violation": bool(is_vio),
-            "attribute": "OverallWidth",
+            "attribute": attr,
             "before": round(before, 3),
-            "after": new_w,
-            "rule": f"OverallWidth >= {MIN_DOOR_WIDTH_M} m",
-            "evidence": f"Kapı genişliği {new_w*100:.0f} cm "
-                        f"({'< 90 → İHLAL' if is_vio else '≥ 90 → uygun'})",
+            "after": new_v,
+            "rule": rule,
+            "evidence": ev,
         })
 
-    # --- 2) KOLON YERLEŞTİRME ------------------------------------------
-    if storey is not None and body_ctx is not None:
+    # --- 2) KOLON YERLEŞTİRME (door_only ise atla) ---------------------
+    if not p.door_only and storey is not None and body_ctx is not None:
         from .ifc_inject import _add_column_obstruction
         door_by_guid = {d.GlobalId: d for d in doors}
         # GPT planı varsa onu kullan; yoksa kuralsal
