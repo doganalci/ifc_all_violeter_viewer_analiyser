@@ -243,6 +243,14 @@ def generate_batch(n: int, out_dir: str | Path,
         results.append(info)
         if progress_cb:
             progress_cb(i + 1, n, info)
+    # Veri kümesi defterini güncelle — best-effort (üretimi bozmaz).
+    if register_in_db:
+        try:
+            from ml.tracking import rebuild_dataset_registry
+            from paths import data_home
+            rebuild_dataset_registry(str(data_home()))
+        except Exception:
+            pass
     return results
 
 

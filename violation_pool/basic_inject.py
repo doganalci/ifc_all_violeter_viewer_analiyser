@@ -433,4 +433,12 @@ def run_basic_batch(dataset_tag: str, *, variants: int = 5, seed_start: int = 10
             done += 1
             if progress_cb:
                 progress_cb(done, total, stem)
+    # Veri kümesi defterini (data klasörü/datasets.xlsx) güncelle — best-effort.
+    if register_in_db:
+        try:
+            from ml.tracking import rebuild_dataset_registry
+            from paths import data_home
+            rebuild_dataset_registry(str(data_home()))
+        except Exception:
+            pass
     return results
