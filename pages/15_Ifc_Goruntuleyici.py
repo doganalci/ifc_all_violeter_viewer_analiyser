@@ -297,25 +297,44 @@ if ovc[3].button("🧹 Seçimi temizle (cross-highlight)",
     st.rerun()
 
 # --- Büyütme kontrolü ---------------------------------------------------
+# State formatı: None | "<col>_both" | "<col>_3d" | "<col>_graph"
+# col ∈ {"ana", "vio", "pred"}
 st.markdown("#### Görünüm")
-bc = st.columns(4)
-mxd = st.session_state.get("mv_maximized", None)  # None | "ana" | "vio" | "pred"
-if bc[0].button("⛶ Ana baseline büyüt", use_container_width=True,
-                disabled=(mxd == "ana")):
-    st.session_state["mv_maximized"] = "ana"
-    st.rerun()
-if bc[1].button("⛶ İhlalli büyüt", use_container_width=True,
-                disabled=(mxd == "vio")):
-    st.session_state["mv_maximized"] = "vio"
-    st.rerun()
-if bc[2].button("⛶ Tahmin büyüt", use_container_width=True,
-                disabled=(mxd == "pred")):
-    st.session_state["mv_maximized"] = "pred"
-    st.rerun()
-if bc[3].button("🔲 Küçült (3 sütun)", use_container_width=True,
-                disabled=(mxd is None)):
-    st.session_state["mv_maximized"] = None
-    st.rerun()
+mxd = st.session_state.get("mv_maximized", None)
+if mxd is None:
+    bc = st.columns(3)
+    if bc[0].button("⛶ Ana baseline büyüt (3D + graph)", use_container_width=True):
+        st.session_state["mv_maximized"] = "ana_both"
+        st.rerun()
+    if bc[1].button("⛶ İhlalli büyüt (3D + graph)", use_container_width=True):
+        st.session_state["mv_maximized"] = "vio_both"
+        st.rerun()
+    if bc[2].button("⛶ Tahmin büyüt (3D + graph)", use_container_width=True):
+        st.session_state["mv_maximized"] = "pred_both"
+        st.rerun()
+else:
+    col_name, mode = mxd.split("_", 1)
+    bc = st.columns(4)
+    if mode == "both":
+        if bc[0].button("⛶ Sadece 3D büyüt", use_container_width=True):
+            st.session_state["mv_maximized"] = f"{col_name}_3d"
+            st.rerun()
+        if bc[1].button("⛶ Sadece Graph büyüt", use_container_width=True):
+            st.session_state["mv_maximized"] = f"{col_name}_graph"
+            st.rerun()
+        if bc[2].button("🔲 Küçült (3 sütun grid)", use_container_width=True,
+                        type="primary"):
+            st.session_state["mv_maximized"] = None
+            st.rerun()
+    else:
+        if bc[0].button("⬜ Stack moduna dön (3D + graph)",
+                        use_container_width=True):
+            st.session_state["mv_maximized"] = f"{col_name}_both"
+            st.rerun()
+        if bc[1].button("🔲 Küçült (3 sütun grid)", use_container_width=True,
+                        type="primary"):
+            st.session_state["mv_maximized"] = None
+            st.rerun()
 
 # --- Sample'ları yükle --------------------------------------------------
 ana_sample = load_sample_for(ana_entry)
@@ -359,24 +378,48 @@ violated_meshes = _safe_meshes(violated_entry["ifc_path"]) if violated_entry els
 pred_meshes = violated_meshes
 pred_sample = violated_sample
 
+# Panel boyutları
 PANEL_H_3D_GRID = 380
-PANEL_H_3D_FULL = 720
 PANEL_H_GR_GRID = 380
-PANEL_H_GR_FULL = 600
+# "both" mod — iki panel stacked, biraz büyük
+PANEL_H_3D_BOTH = 520
+PANEL_H_GR_BOTH = 480
+# Tekli panel modu — çok büyük
+PANEL_H_3D_FULL = 760
+PANEL_H_GR_FULL = 700
+
+
+def _panel_max_btn(target_state: str, btn_key: str) -> None:
+    """Panel başlığındaki ⛶/🔲 buton — büyütme toggle.
+
+    target_state: bu butonun maksimize ettiği state ("ana_3d", "vio_graph" vs.)
+    """
+    cur = st.session_state.get("mv_maximized")
+    label = "🔲" if cur == target_state else "⛶"
+    if st.button(label, key=btn_key,
+                 help=("Bu paneli küçült" if cur == target_state
+                       else "Bu paneli tek başına büyüt")):
+        st.session_state["mv_maximized"] = (
+            None if cur == target_state else target_state)
+        st.rerun()
 
 
 def _render_ifc(col, title: str, meshes, *,
                 vio: set = set(), decoy: set = set(), normal: set = set(),
                 pred: set = set(), height: int = PANEL_H_3D_GRID,
-                key: str) -> None:
+                key: str, max_state: str | None = None) -> None:
     with col:
-        st.markdown(f"##### {title}")
+        # Başlık + büyütme butonu
+        if max_state:
+            hc = st.columns([7, 1])
+            hc[0].markdown(f"##### {title}")
+            with hc[1]:
+                _panel_max_btn(max_state, f"maxbtn_{key}")
+        else:
+            st.markdown(f"##### {title}")
         if meshes is None:
             st.info("📭 Gösterilecek veri yok")
             return
-        # Tahmin sütununda predicted_guids "yeşil" yerine biz ona ihlal rengi
-        # (kırmızı) gösteriyoruz; bu daha sezgisel: "model bunu ihlal sayıyor".
-        # build_figure violation_guids=kırmızı/parlak; pred için onu kullanıyoruz.
         merged_vio = vio | pred
         fig = build_figure(
             meshes, violation_guids=merged_vio, decoy_guids=decoy,
@@ -388,9 +431,16 @@ def _render_ifc(col, title: str, meshes, *,
 def _render_graph(col, title: str, sample, *,
                   vio: set = set(), decoy: set = set(), normal: set = set(),
                   pred: set = set(), height: int = PANEL_H_GR_GRID,
-                  key: str) -> None:
+                  key: str, max_state: str | None = None) -> None:
     with col:
-        st.markdown(f"##### Graph · {title}")
+        # Başlık + büyütme butonu
+        if max_state:
+            hc = st.columns([7, 1])
+            hc[0].markdown(f"##### Graph · {title}")
+            with hc[1]:
+                _panel_max_btn(max_state, f"maxbtn_{key}")
+        else:
+            st.markdown(f"##### Graph · {title}")
         if sample is None:
             st.info("📭 Gösterilecek veri yok")
             return
@@ -408,58 +458,94 @@ def _render_graph(col, title: str, sample, *,
 
 # --- Render based on maximized state -----------------------------------
 st.divider()
-mxd = st.session_state.get("mv_maximized", None)
 
-if mxd == "ana":
-    st.markdown("### 🏛️ Ana baseline (büyütülmüş)")
-    _render_ifc(st, f"Ana baseline · `{ana_entry['name']}`", ana_meshes,
-                height=PANEL_H_3D_FULL, key="ana_full")
-    _render_graph(st, "Ana baseline", ana_sample,
-                  height=PANEL_H_GR_FULL, key="ana_full_g")
-elif mxd == "vio":
-    st.markdown("### 💥 İhlalli (büyütülmüş)")
-    _render_ifc(st,
-                f"İhlalli · `{violated_entry['name'] if violated_entry else '—'}`",
-                violated_meshes, vio=vio_show, decoy=dec_show, normal=nor_show,
-                height=PANEL_H_3D_FULL, key="vio_full")
-    _render_graph(st, "İhlalli", violated_sample,
-                  vio=vio_show, decoy=dec_show, normal=nor_show,
-                  height=PANEL_H_GR_FULL, key="vio_full_g")
-elif mxd == "pred":
-    st.markdown("### 🤖 Tahmin (büyütülmüş)")
-    title = (f"Tahmin · run=`{cached.get('run')}`" if cached
-             else "Tahmin (henüz çalıştırılmadı)")
-    _render_ifc(st, title, pred_meshes,
-                pred=predicted_guids,
-                height=PANEL_H_3D_FULL, key="pred_full")
-    _render_graph(st, title, pred_sample,
-                  pred=predicted_guids,
-                  height=PANEL_H_GR_FULL, key="pred_full_g")
+# Pre-compute tahmin başlığı
+pred_title = (f"Tahmin · `{cached.get('run')}` · eşik {cached.get('threshold')}"
+              if cached else "Tahmin")
+vio_title = (f"İhlalli · `{violated_entry['name']}`" if violated_entry
+             else "İhlalli")
+
+# Sütun argümanları — render fonksiyonlarına gönderilecek
+_col_args = {
+    "ana": {
+        "title": f"Ana baseline · `{ana_entry['name']}`",
+        "ifc_meshes": ana_meshes, "sample": ana_sample,
+        "vio": set(), "decoy": set(), "normal": set(),
+        "pred": set(),
+    },
+    "vio": {
+        "title": vio_title,
+        "ifc_meshes": violated_meshes, "sample": violated_sample,
+        "vio": vio_show, "decoy": dec_show, "normal": nor_show,
+        "pred": set(),
+    },
+    "pred": {
+        "title": pred_title,
+        "ifc_meshes": pred_meshes, "sample": pred_sample,
+        "vio": set(), "decoy": set(), "normal": set(),
+        "pred": predicted_guids if cached else set(),
+    },
+}
+
+
+def _render_col_panel(c: dict, *, panel_key: str, mode: str) -> None:
+    """Tek bir sütunun (col_name) ilgili modda 3D + graph render."""
+    if mode == "both":
+        # 3D ve graph stacked, ikisi de büyük
+        _render_ifc(st, c["title"], c["ifc_meshes"],
+                    vio=c["vio"], decoy=c["decoy"], normal=c["normal"],
+                    pred=c["pred"], height=PANEL_H_3D_BOTH,
+                    key=f"{panel_key}_3d", max_state=f"{panel_key}_3d")
+        _render_graph(st, c["title"], c["sample"],
+                      vio=c["vio"], decoy=c["decoy"], normal=c["normal"],
+                      pred=c["pred"], height=PANEL_H_GR_BOTH,
+                      key=f"{panel_key}_g", max_state=f"{panel_key}_graph")
+    elif mode == "3d":
+        _render_ifc(st, c["title"], c["ifc_meshes"],
+                    vio=c["vio"], decoy=c["decoy"], normal=c["normal"],
+                    pred=c["pred"], height=PANEL_H_3D_FULL,
+                    key=f"{panel_key}_3d_full")
+    elif mode == "graph":
+        _render_graph(st, c["title"], c["sample"],
+                      vio=c["vio"], decoy=c["decoy"], normal=c["normal"],
+                      pred=c["pred"], height=PANEL_H_GR_FULL,
+                      key=f"{panel_key}_g_full")
+
+
+if mxd is not None:
+    col_name, mode = mxd.split("_", 1)
+    panel_title = {"ana": "🏛️ Ana baseline",
+                   "vio": "💥 İhlalli",
+                   "pred": "🤖 Tahmin"}.get(col_name, col_name)
+    mode_label = {"both": "3D + Graph", "3d": "sadece 3D",
+                  "graph": "sadece Graph"}.get(mode, mode)
+    st.markdown(f"### {panel_title} ({mode_label})")
+    _render_col_panel(_col_args[col_name], panel_key=col_name, mode=mode)
 else:
-    # --- 3D row (3 sütun) ----------------------------------------------
+    # 3D row
     st.markdown("### 🧱 3D Görselleştirme")
     c1, c2, c3 = st.columns(3)
-    _render_ifc(c1, f"Ana baseline · `{ana_entry['name']}`", ana_meshes,
-                key="ana_ifc")
-    _render_ifc(c2,
-                f"İhlalli · `{violated_entry['name']}`" if violated_entry
-                else "İhlalli",
-                violated_meshes, vio=vio_show, decoy=dec_show, normal=nor_show,
-                key="vio_ifc")
-    pred_title = (f"Tahmin · `{cached.get('run')}` · eşik {cached.get('threshold')}"
-                  if cached else "Tahmin")
-    _render_ifc(c3, pred_title, pred_meshes,
+    _render_ifc(c1, _col_args["ana"]["title"], _col_args["ana"]["ifc_meshes"],
+                key="ana_ifc_grid", max_state="ana_3d")
+    _render_ifc(c2, _col_args["vio"]["title"], _col_args["vio"]["ifc_meshes"],
+                vio=vio_show, decoy=dec_show, normal=nor_show,
+                key="vio_ifc_grid", max_state="vio_3d")
+    _render_ifc(c3, _col_args["pred"]["title"],
+                _col_args["pred"]["ifc_meshes"],
                 pred=predicted_guids if cached else set(),
-                key="pred_ifc")
+                key="pred_ifc_grid", max_state="pred_3d")
 
-    # --- Graph row -----------------------------------------------------
+    # Graph row
     st.markdown("### 🕸️ Graph (node tıkla → vurgula · sürükle → düzenle)")
     g1, g2, g3 = st.columns(3)
-    _render_graph(g1, "Ana baseline", ana_sample, key="ana_g")
-    _render_graph(g2, "İhlalli", violated_sample,
-                  vio=vio_show, decoy=dec_show, normal=nor_show, key="vio_g")
-    _render_graph(g3, pred_title, pred_sample,
-                  pred=predicted_guids if cached else set(), key="pred_g")
+    _render_graph(g1, _col_args["ana"]["title"], ana_sample,
+                  key="ana_g_grid", max_state="ana_graph")
+    _render_graph(g2, _col_args["vio"]["title"], violated_sample,
+                  vio=vio_show, decoy=dec_show, normal=nor_show,
+                  key="vio_g_grid", max_state="vio_graph")
+    _render_graph(g3, _col_args["pred"]["title"], pred_sample,
+                  pred=predicted_guids if cached else set(),
+                  key="pred_g_grid", max_state="pred_graph")
 
 # --- Inspector ----------------------------------------------------------
 if current:
