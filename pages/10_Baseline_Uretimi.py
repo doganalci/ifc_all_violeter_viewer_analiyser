@@ -128,7 +128,8 @@ if n_total_rooms < 2 or n_total_rooms > 4:
 else:
     st.caption(
         f"✓ Toplam {n_total_rooms} oda+salon · "
-        f"layout `{'lshape' if int(n_kor_in) == 2 else 'straight'}` zorlanacak"
+        f"layout `{'lshape' if int(n_kor_in) == 2 else 'straight'}` zorlanacak · "
+        f"**tüm IFC'ler 1 katlı** (zorla)"
     )
     constraints_valid = True
 
@@ -294,6 +295,79 @@ if st.button("🏠 LLM ile baseline'ları üret", type="primary",
         f"{n_ok} IFC ({'ana ✓' if res.get('ana_id') else 'ana ❌'} + "
         f"{len(res.get('variant_ids', []))} varyant)"
     )
+
+    # Parametre denetimi — gönderilen vs. her IFC'de fiilen kullanılan
+    with st.expander("🔬 Parametre denetimi (gönderilen → kullanılan)",
+                     expanded=False):
+        st.markdown("**Gönderilen UI parametreleri:**")
+        sent_params = {
+            "🚪 Oda sayısı": int(n_oda_in),
+            "🛋️ Salon sayısı": int(n_salon_in),
+            "🚶 Koridor sayısı": int(n_kor_in),
+            "Toplam oda+salon": n_total_rooms,
+            "Layout (zorlanan)": (
+                "lshape" if int(n_kor_in) == 2 else "straight"),
+            "Kat sayısı (zorlanan)": 1,
+            "Oda genişlik aralığı (m)": list(room_w),
+            "Oda boy aralığı (m)": list(room_l),
+            "Koridor genişlik aralığı (m)": list(corridor_w),
+            "Koridor boy aralığı (m)": list(corridor_l),
+            "Kapı genişlik aralığı (m)": list(door_w),
+            "Kapı yükseklik aralığı (m)": list(door_h),
+            "Duvar kalınlığı (m)": wall_t,
+        }
+        st.json(sent_params, expanded=True)
+
+        st.markdown("**Her IFC için fiilen kullanılan (LLM + motor seçimleri):**")
+        ifc_rows = []
+        if res.get("ana_plan"):
+            ap = res["ana_plan"]
+            # Ana baseline'ın gerçek oda/koridor boyutlarını DB'den al
+            ana_rec = storage.get_ifc_model(res["ana_id"]) if res.get("ana_id") else None
+            ana_meta = (ana_rec or {}).get("params", {}) or {}
+            if isinstance(ana_meta, str):
+                import json as _json
+                try:
+                    ana_meta = _json.loads(ana_meta)
+                except Exception:
+                    ana_meta = {}
+            ifc_rows.append({
+                "IFC": "ana_baseline",
+                "Kat": ap.n_storeys,
+                "Oda+Salon": ap.n_rooms_per_floor,
+                "Layout": ap.layout,
+                "Kat yük. (m)": ap.storey_height,
+                "Salon (motor)": ana_meta.get("n_salons", "?"),
+                "Oda boyutları (m)": str(ana_meta.get("room_sizes_m") or {})[:80] + "…",
+                "Kapı (cm)": str(ana_meta.get("door_widths_cm") or {})[:80] + "…",
+            })
+        for i, vp in enumerate(res.get("variant_plans", [])):
+            var_id = (res.get("variant_ids") or [None])[i] if i < len(res.get("variant_ids", [])) else None
+            var_rec = storage.get_ifc_model(var_id) if var_id else None
+            var_meta = (var_rec or {}).get("params", {}) or {}
+            if isinstance(var_meta, str):
+                import json as _json
+                try:
+                    var_meta = _json.loads(var_meta)
+                except Exception:
+                    var_meta = {}
+            ifc_rows.append({
+                "IFC": f"varyant_{i+1}",
+                "Kat": vp.n_storeys,
+                "Oda+Salon": vp.n_rooms_per_floor,
+                "Layout": vp.layout,
+                "Kat yük. (m)": vp.storey_height,
+                "Salon (motor)": var_meta.get("n_salons", "?"),
+                "Oda boyutları (m)": str(var_meta.get("room_sizes_m") or {})[:80] + "…",
+                "Kapı (cm)": str(var_meta.get("door_widths_cm") or {})[:80] + "…",
+            })
+        if ifc_rows:
+            st.dataframe(pd.DataFrame(ifc_rows), hide_index=True,
+                         use_container_width=True)
+        st.caption(
+            "💡 'Kat' her zaman 1 (zorlu), 'Layout' zorlu, 'Oda+Salon' zorlu. "
+            "Oda boyutları + kapı genişlikleri UI aralıklarından rastgele örneklenir."
+        )
 
     # LLM ölçüm özeti
     totals = res.get("totals", {})

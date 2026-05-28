@@ -36,7 +36,11 @@ def _apply_constraints(plan: DesignPlan, constraints: dict | None) -> DesignPlan
 
     constraints: {n_rooms, n_salons, n_corridors} — verilen alanlar zorlanır,
     None olanlar LLM'in seçtiği değerde kalır.
+
+    Tüm IFC'ler tek katlı zorlanır (n_storeys=1) — kullanıcı isteği.
     """
+    # Tek kat zorla (LLM ne dese olsun)
+    plan.n_storeys = 1
     if not constraints:
         return plan
     n_rooms = constraints.get("n_rooms")

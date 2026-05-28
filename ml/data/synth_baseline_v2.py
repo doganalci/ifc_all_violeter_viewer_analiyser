@@ -372,12 +372,16 @@ def make_spec_v2(seed: int, params: SynthParamsV2 | None = None,
         })
 
     door_widths_cm: dict[str, float] = {}
+    room_sizes_m: dict[str, list[float]] = {}
     for sdata in storeys_data:
         for op in sdata["openings"]:
             if op.get("type") != "door":
                 continue
             key = f"{sdata['name']} · {op.get('name') or op['room']+'-'+op['side']}"
             door_widths_cm[key] = round(float(op["width"]) * 100, 1)
+        for r in sdata["rooms"]:
+            key = f"{sdata['name']} · {r['name']}"
+            room_sizes_m[key] = [round(r["size"][0], 2), round(r["size"][1], 2)]
 
     return {
         "name": name or f"synth-v2-{seed:05d}",
@@ -390,8 +394,21 @@ def make_spec_v2(seed: int, params: SynthParamsV2 | None = None,
             "n_storeys": n_storeys,
             "n_rooms_per_floor": n_rooms,
             "layout": layout,
+            "n_salons": p.n_salons,
             "door_widths_cm": door_widths_cm,
+            "room_sizes_m": room_sizes_m,
+            "wall_thickness_m": p.wall_thickness,
+            "storey_height_m": storey_h,
             "compliant": True,
+            # Sliders'tan gelen UI aralıkları (audit için)
+            "param_ranges": {
+                "room_w": [p.room_w_min, p.room_w_max],
+                "room_l": [p.room_l_min, p.room_l_max],
+                "corridor_w": [p.corridor_w_min, p.corridor_w_max],
+                "corridor_l": [p.corridor_l_min, p.corridor_l_max],
+                "door_w": [p.door_w_min, p.door_w_max],
+                "door_h": [p.door_h_min, p.door_h_max],
+            },
         },
     }
 
