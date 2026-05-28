@@ -27,8 +27,50 @@ sys.path.insert(0, str(_ROOT))
 from violation_pool import storage
 from violation_pool.config import settings
 from llm.baseline_pipeline import run_baseline_pipeline
-from llm.pricing import known_models
+from llm.excel_log import read_llm_totals
+from llm.pricing import estimate_cost, known_models
 from ml.data.synth_baseline_v2 import SynthParamsV2
+
+
+def _fmt_int(n: int | float) -> str:
+    """1234 → '1.234' (Türkçe binlik ayraç)."""
+    return f"{int(n):,}".replace(",", ".")
+
+
+def _render_persistent_counter(model_name: str) -> None:
+    """Üst kısımda sabit token + maliyet sayaç widget'ı."""
+    totals = read_llm_totals() or {
+        "n_calls": 0, "total_tokens": 0,
+        "total_cost_usd": 0.0, "total_duration_s": 0.0,
+    }
+    session_t = st.session_state.get("session_llm_totals", {
+        "n_calls": 0, "tokens": 0, "cost": 0.0, "duration": 0.0,
+    })
+    mc = st.columns(4)
+    mc[0].metric(
+        "📒 Toplam üretim (tüm zamanlar)",
+        _fmt_int(totals.get("n_calls", 0)),
+        delta=(f"+{session_t['n_calls']} bu oturum"
+               if session_t["n_calls"] else None),
+    )
+    mc[1].metric(
+        "Token (toplam)",
+        _fmt_int(totals.get("total_tokens", 0)),
+        delta=(f"+{_fmt_int(session_t['tokens'])} bu oturum"
+               if session_t["tokens"] else None),
+    )
+    mc[2].metric(
+        "Maliyet ≈ (toplam)",
+        f"${totals.get('total_cost_usd', 0):.4f}",
+        delta=(f"+${session_t['cost']:.4f}"
+               if session_t["cost"] > 0 else None),
+    )
+    mc[3].metric(
+        "Süre (toplam, LLM)",
+        f"{totals.get('total_duration_s', 0):.0f}s",
+        delta=(f"+{session_t['duration']:.1f}s"
+               if session_t["duration"] else None),
+    )
 
 
 st.set_page_config(page_title="Baseline Üretimi", layout="wide", page_icon="🏠")
@@ -46,6 +88,20 @@ if not settings.openai_api_key:
         "dosyana ekle ve Streamlit'i yeniden başlat."
     )
     st.stop()
+
+# Sabit sayaç — sayfa başında her zaman görünür
+_render_persistent_counter("placeholder")
+try:
+    from paths import data_home as _dh
+    _excel_path = _dh() / "llm_generations.xlsx"
+    st.caption(
+        f"📒 `{_excel_path}` — her LLM çağrısı için bir satır kalıcı. "
+        "**Bu klasör repo dışındadır → git pull/push'tan etkilenmez** "
+        "(`IFC_DATA_HOME` env var ile yer değiştirilebilir)."
+    )
+except Exception:
+    st.caption("📒 llm_generations.xlsx — her LLM çağrısı kalıcı kayıt")
+st.divider()
 
 
 # --- 1. Paket adı --------------------------------------------------------
@@ -275,10 +331,20 @@ with p2:
         help="Ana baseline = seed_start, varyantlar = seed_start+1, +2, ...",
     )
 
-mc = st.columns(3)
+mc = st.columns(4)
 mc[0].metric("Ana baseline", 1)
 mc[1].metric("Varyant", int(variants))
-mc[2].metric("Toplam LLM çağrısı", int(variants) + 1)
+n_calls_est = int(variants) + 1
+mc[2].metric("Toplam LLM çağrısı", n_calls_est)
+# Tahmini maliyet — kabaca ~2000 input + ~700 output / çağrı
+_est_per_call = estimate_cost(model, 2000, 700)
+_est_total = _est_per_call["total_usd"] * n_calls_est
+mc[3].metric(
+    "🧮 Tahmini maliyet",
+    f"${_est_total:.4f}",
+    help=f"~{2700 * n_calls_est:,} token · {model} fiyatı"
+         f"{' (tahmin)' if _est_per_call['is_estimate'] else ''}",
+)
 
 st.info(
     "💡 Bu sayfada **tüm boyut kararlarını LLM verir** (kat yüksekliği, duvar "
@@ -356,6 +422,17 @@ if st.button("🏠 LLM ile baseline'ları üret", type="primary",
         f"{n_ok} IFC ({'ana ✓' if res.get('ana_id') else 'ana ❌'} + "
         f"{len(res.get('variant_ids', []))} varyant)"
     )
+
+    # Sürekli sayaç delta'sı için session state güncelle
+    _t = res.get("totals", {})
+    s = st.session_state.setdefault(
+        "session_llm_totals",
+        {"n_calls": 0, "tokens": 0, "cost": 0.0, "duration": 0.0},
+    )
+    s["n_calls"] += int(_t.get("n_calls", 0))
+    s["tokens"] += int(_t.get("total_tokens", 0))
+    s["cost"] += float(_t.get("cost_usd", 0.0))
+    s["duration"] += float(_t.get("duration_s", 0.0))
 
     # Parametre denetimi — LLM ne karar verdi, fiilen ne çizildi
     with st.expander("🔬 Parametre denetimi (UI zorla + LLM kararı + motor çıktısı)",

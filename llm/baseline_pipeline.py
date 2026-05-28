@@ -69,6 +69,18 @@ def _apply_constraints(plan: DesignPlan, constraints: dict | None) -> DesignPlan
     return plan
 
 
+def _log_params_snapshot(constraints: dict | None, *,
+                          variants: int, seed_start: int,
+                          model: str) -> dict:
+    """Excel'e yazılacak parametre snapshot'ı."""
+    return {
+        "model": model,
+        "variants": variants,
+        "seed_start": seed_start,
+        "constraints": constraints or {},
+    }
+
+
 def run_baseline_pipeline(user_template: str,
                           dataset_tag: str, *,
                           variants: int = 5, seed_start: int = 0,
@@ -106,6 +118,11 @@ def run_baseline_pipeline(user_template: str,
     if constraints and constraints.get("n_salons") is not None:
         params.n_salons = int(constraints["n_salons"])
 
+    # Excel log için parametre snapshot
+    params_snapshot = _log_params_snapshot(
+        constraints, variants=variants, seed_start=seed_start, model=model,
+    )
+
     total = 1 + variants
     done = 0
     errors: list[str] = []
@@ -132,6 +149,7 @@ def run_baseline_pipeline(user_template: str,
         log_llm_generation(
             paket=dataset_tag, ifc_name=ana_stem, kind="ana_baseline",
             model=model, user_prompt=user_template,
+            parametreler=params_snapshot,
             status="error", error=str(e),
         )
         if progress_cb:
@@ -182,6 +200,8 @@ def run_baseline_pipeline(user_template: str,
         duration_s=ana_plan.duration_s, cost_usd=ana_plan.cost_usd,
         design_summary=ana_plan.design_summary(),
         rationale=ana_plan.rationale,
+        parametreler=params_snapshot,
+        tasarim_plan=ana_plan.to_dict(),
         status=ifc_status, error=ifc_err,
     )
 
@@ -225,6 +245,7 @@ def run_baseline_pipeline(user_template: str,
                 paket=dataset_tag, ifc_name=var_stem,
                 kind="variant_baseline", model=model,
                 user_prompt=user_template,
+                parametreler=params_snapshot,
                 status="error", error=str(e),
             )
             done += 1
@@ -270,6 +291,8 @@ def run_baseline_pipeline(user_template: str,
             duration_s=var_plan.duration_s, cost_usd=var_plan.cost_usd,
             design_summary=var_plan.design_summary(),
             rationale=var_plan.rationale,
+            parametreler=params_snapshot,
+            tasarim_plan=var_plan.to_dict(),
             status=ifc_status, error=ifc_err,
         )
 
