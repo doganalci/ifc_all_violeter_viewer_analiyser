@@ -154,19 +154,36 @@ def _call_llm(system_prompt: str, user_prompt: str, model: str) -> DesignPlan:
 
     Hata durumunda RuntimeError fırlatır (yine de süreyi ölçemediği için
     upstream catch eden taraf süre/maliyet için 0 alır).
+
+    Not: bazı modeller (gpt-5, o1 ailesi) custom temperature kabul etmiyor —
+    sadece default (1). O hatada otomatik olarak temperature parametresini
+    çıkarıp tekrar deniyoruz.
     """
     import time
     from llm.pricing import estimate_cost
     from violation_pool.ifc_inject import _chat_with_retry
 
+    messages = [{"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}]
+    response_format = {"type": "json_object"}
+
     t0 = time.time()
-    resp = _chat_with_retry(
-        model,
-        [{"role": "system", "content": system_prompt},
-         {"role": "user", "content": user_prompt}],
-        temperature=0.7,
-        response_format={"type": "json_object"},
-    )
+    try:
+        resp = _chat_with_retry(
+            model, messages,
+            temperature=0.7,
+            response_format=response_format,
+        )
+    except Exception as e:
+        # gpt-5 / o1 ailesi: "does not support 'temperature'" — fallback
+        msg = str(e).lower()
+        if "temperature" in msg and ("unsupported" in msg or "does not support" in msg):
+            resp = _chat_with_retry(
+                model, messages,
+                response_format=response_format,
+            )
+        else:
+            raise
     duration = time.time() - t0
     content = resp.choices[0].message.content or "{}"
 
