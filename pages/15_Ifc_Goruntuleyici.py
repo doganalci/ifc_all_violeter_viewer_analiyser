@@ -1,31 +1,37 @@
-"""IFC Görüntüleyici — 3 sütun (ana baseline | baseline | ihlalli) × 2 satır (3D + graph).
+"""IFC Görüntüleyici — 3 sütun (Ana baseline | İhlalli | Tahmin) × 2 satır (3D + graph).
 
 Akış:
-  * Üstte ana baseline (paket) seçilir → tüm paket aktif olur.
-  * Col 1 = **Ana baseline** (paketin ilk baseline'ı, sabit referans).
-  * Col 2 = **Baseline** — paket içinden bir baseline (◀/▶/dropdown).
-  * Col 3 = **İhlalli** — seçili baseline'dan üretilen ihlalli IFC (◀/▶/dropdown).
+  * Üstte paket (ana baseline) seçilir → ana baseline col 1'de sabit.
+  * Col 1 = **Ana baseline** (paketin parent_id=None baseline'ı, sabit).
+  * Col 2 = **İhlalli** — ana'ya transitively bağlı tüm violateds. ◀/▶.
+  * Col 3 = **Tahmin** — eğitilmiş GAT modelinin İhlalli üzerinde tahmini.
+    Model seçici + eşik slider + "Tahmin Yap" butonu.
   * Üst sıra: 3D IFC render (Plotly Mesh3d).
   * Alt sıra: interaktif graph (streamlit-agraph: node sürükle, tıkla).
-  * Graph'ta tıklama → üç sütunda da aynı GUID parlatılır (cross-highlight).
+  * Graph'ta tıklama → üç sütunda da aynı GUID mavi vurgulanır.
+  * Her sütunun başlığında ⛶ Büyüt: o sütun (3D + graph) tam genişlik,
+    diğer ikisi saklı. Tekrar bas → grid'e döner.
 
 Boş veri:
-  * Baseline yoksa sayfa durur.
-  * İhlalli yoksa col 3 = "📭 Veri üretilmemiş".
+  * Ana baseline yoksa: "Gösterilecek veri yok"
+  * Bu ana'ya ait İhlalli yoksa: col 2 = "Gösterilecek veri yok"
+  * Tahmin yapılmadıysa: col 3 = "Gösterilecek veri yok"
 """
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
 
+import numpy as np
 import streamlit as st
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
 from ml.app.state import (
-    get_dataset_root, get_selected_node, labels_summary,
+    entry_by_id, get_dataset_root, get_selected_node, labels_summary,
     list_entries, load_sample_for, set_selected_node, violated_children,
 )
 from ml.viz.graph_view import interactive_agraph
@@ -33,56 +39,7 @@ from ml.viz.ifc3d import build_figure, extract_meshes
 from violation_pool import storage
 
 
-def _ifc_prompt_panel(entry: dict | None, key: str) -> None:
-    """Verilen IFC için LLM prompt + tasarım planı expander'ları çiz."""
-    if entry is None:
-        return
-    rec = storage.get_ifc_model(entry["id"]) or {}
-    user_prompt = rec.get("prompt") or ""
-    llm_model = rec.get("llm_model") or ""
-    params = rec.get("params") or {}
-    if isinstance(params, str):
-        import json as _json
-        try:
-            params = _json.loads(params)
-        except Exception:
-            params = {}
-    design = params.get("design_plan") or {}
-    kind_label = params.get("kind_label") or ""
-
-    if not (user_prompt or design):
-        # LLM'siz üretilmiş (eski prosedürel) — yine de bilgi göster
-        with st.expander(f"ℹ️ Üretim bilgisi · {key}", expanded=False):
-            st.write(f"**Model:** `{llm_model or 'synth (LLM yok)'}`")
-            st.write(f"**Tür:** `{kind_label or '—'}`")
-            if params:
-                st.json(params, expanded=False)
-        return
-
-    with st.expander(f"🤖 LLM prompt · {key}", expanded=False):
-        meta_cols = st.columns([1, 1, 2])
-        meta_cols[0].metric("Model", llm_model or "?")
-        meta_cols[1].metric("Tür", kind_label or "baseline")
-        if design:
-            meta_cols[2].caption(
-                f"🏛️ Tasarım: **{design.get('n_storeys', '?')} kat** · "
-                f"**{design.get('n_rooms_per_floor', '?')} oda/kat** · "
-                f"layout=`{design.get('layout', '?')}`"
-            )
-        if user_prompt:
-            st.markdown("**User prompt** (LLM'e gönderilen):")
-            st.code(user_prompt, language="text")
-        if design.get("system_prompt"):
-            st.markdown("**System prompt** (LLM rolü):")
-            st.code(design["system_prompt"], language="text")
-        if design.get("rationale"):
-            st.markdown(f"**LLM rationale:** _{design['rationale']}_")
-        if design.get("raw_llm_response"):
-            st.markdown("**LLM ham yanıtı:**")
-            st.code(design["raw_llm_response"], language="json")
-
-
-# ---- Cached IFC tessellation ------------------------------------------------
+# ---- IFC tessellation cache ------------------------------------------------
 
 @st.cache_data(show_spinner="IFC tessellate ediliyor...")
 def _cached_meshes(ifc_path: str, _mtime: float):
@@ -112,14 +69,86 @@ def _safe_meshes(ifc_path: str | None):
         return None
 
 
+# ---- Model inference helpers (legacy/03'ten) -------------------------------
+
+def _list_runs(run_dir: Path) -> list[Path]:
+    if not run_dir.exists():
+        return []
+    return sorted([p for p in run_dir.iterdir()
+                   if p.is_dir() and (p / "best.pt").exists()])
+
+
+def _load_model(cfg, in_dim: int, num_edge_types: int):
+    from ml.model.gat import GATNodeClassifier
+    from ml.model.hetero_gat import HeteroGATNodeClassifier
+    if cfg.model == "hetero_gat":
+        return HeteroGATNodeClassifier(
+            in_dim=in_dim, hidden_dim=cfg.hidden_dim,
+            num_edge_types=num_edge_types, heads=cfg.heads, dropout=cfg.dropout,
+        )
+    return GATNodeClassifier(
+        in_dim=in_dim, hidden_dim=cfg.hidden_dim,
+        num_edge_types=num_edge_types, edge_emb_dim=cfg.edge_emb_dim,
+        heads=cfg.heads, dropout=cfg.dropout,
+    )
+
+
+def _run_inference(sample, run_path: Path, threshold: float):
+    """İhlalli sample üzerinde GAT inference; (predicted_guids, info) döner."""
+    from ml.train.config import TrainConfig
+    from ml.data.graph_loader import sample_to_data
+    import torch
+
+    cfg_path = run_path / "config.json"
+    ckpt_path = run_path / "best.pt"
+    if not cfg_path.exists() or not ckpt_path.exists():
+        raise RuntimeError("Run klasöründe config.json veya best.pt yok.")
+    cfg = TrainConfig(**json.loads(cfg_path.read_text()))
+    data = sample_to_data(sample)
+    device = cfg.resolve_device()
+    nt = int(data.edge_type.max().item()) + 1 if data.edge_type.numel() else 7
+    model = _load_model(cfg, data.x.shape[1], nt)
+    state = torch.load(str(ckpt_path), map_location=device)
+    model.load_state_dict(state)
+    model.to(device).eval()
+    with torch.no_grad():
+        logits = model(data.x.to(device), data.edge_index.to(device),
+                       data.edge_type.to(device))
+        probs = torch.sigmoid(logits).cpu().numpy()
+    preds = (probs >= threshold).astype(np.int64)
+    predicted = {data.node_ids[i] for i, p in enumerate(preds) if p == 1}
+    return predicted, {
+        "n_predicted": int(preds.sum()),
+        "threshold": threshold,
+        "run_name": run_path.name,
+    }
+
+
+def _all_violateds_under_ana(root: str, ana_id: str) -> list[dict]:
+    """Ana baseline'a transitively bağlı tüm violated'ları getir.
+
+    Yapı: ana → varyant baseline → violated. Ana'ya doğrudan + varyantlara
+    bağlı tüm violated'ları topla (varyantlar gizli, hepsi tek listede).
+    """
+    direct = violated_children(root, ana_id)
+    # Ana'nın çocuk baseline'ları (varyantlar)
+    all_bls = list_entries(root, kind="baseline", require_graph=False)
+    variants = [b for b in all_bls if b.get("parent_id") == ana_id]
+    indirect = []
+    for v in variants:
+        indirect.extend(violated_children(root, v["id"]))
+    out = direct + indirect
+    return sorted(out, key=lambda x: x.get("name") or "")
+
+
 # ---- Page ------------------------------------------------------------------
 
 st.set_page_config(page_title="IFC Görüntüleyici", layout="wide", page_icon="🔍")
 st.title("🔍 IFC Görüntüleyici")
 st.caption(
-    "**Ana baseline** (paketin temsilcisi) · **Baseline** (paket içinden seçili biri) · "
-    "**İhlalli** (seçili baseline'dan türeyen). Graph'ta bir node'a tıklarsan "
-    "üç sütunda da aynı eleman vurgulanır."
+    "**Ana baseline** · **İhlalli** · **Tahmin** (GAT modeli). "
+    "Graph'ta tıkla → üç sütunda da vurgula. Sütun başlığında **⛶ Büyüt** ile "
+    "ekranı kapla."
 )
 
 root = get_dataset_root()
@@ -127,7 +156,7 @@ if not root:
     st.error("Dataset kökü tanımlı değil.")
     st.stop()
 
-# --- Paket (ana baseline adı) seçimi -------------------------------------
+# --- Paket seçimi -------------------------------------------------------
 all_baselines = list_entries(root, kind="baseline", require_graph=False)
 if not all_baselines:
     st.warning(
@@ -144,136 +173,152 @@ def _pkg_of(b: dict) -> str:
 
 
 packages = sorted({_pkg_of(b) for b in all_baselines})
-pkg_counts = {p: sum(1 for b in all_baselines if _pkg_of(b) == p) for p in packages}
+pkg_counts = {p: sum(1 for b in all_baselines if _pkg_of(b) == p)
+              for p in packages}
 
 sel_pkg = st.selectbox(
     "📦 Ana baseline (paket)",
     options=packages,
     format_func=lambda p: f"{p}  ·  {pkg_counts.get(p, 0)} baseline",
-    key="mv6_pkg",
+    key="mv_pkg",
 )
 
-pkg_baselines_all = sorted(
-    [b for b in all_baselines if _pkg_of(b) == sel_pkg],
-    key=lambda b: b.get("name") or "",
-)
-if not pkg_baselines_all:
-    st.warning("Bu pakette baseline yok.")
-    st.stop()
-
-# Ana baseline = parent_id NULL olan baseline (LLM hiyerarşik üretimde).
-# Fallback: parent_id'ye bakmadan paketin ilki (eski prosedürel üretim için).
-_ana_candidates = [b for b in pkg_baselines_all if not b.get("parent_id")]
+pkg_baselines = [b for b in all_baselines if _pkg_of(b) == sel_pkg]
+_ana_candidates = [b for b in pkg_baselines if not b.get("parent_id")]
 if _ana_candidates:
     ana_entry = _ana_candidates[0]
-    # Varyantlar = ana'nın doğrudan çocukları
-    pkg_baselines = [b for b in pkg_baselines_all
-                     if b.get("parent_id") == ana_entry["id"]]
-    if not pkg_baselines:
-        # Hiyerarşi var ama varyant yok → col 2 = ana'nın kendisi
-        pkg_baselines = [ana_entry]
-    _hierarchy_mode = "llm"
+    _hier_mode = "LLM (parent_id ile)"
 else:
-    # Eski prosedürel paket: hiyerarşi yok, hepsi peer.
-    ana_entry = pkg_baselines_all[0]
-    pkg_baselines = pkg_baselines_all
-    _hierarchy_mode = "flat"
+    ana_entry = sorted(pkg_baselines, key=lambda b: b.get("name") or "")[0]
+    _hier_mode = "düz (eski prosedürel)"
 
 st.caption(
-    f"🏛️ Ana baseline: `{ana_entry['name']}` · "
-    f"{len(pkg_baselines)} varyant · "
-    f"hiyerarşi: **{'LLM (parent_id ile)' if _hierarchy_mode == 'llm' else 'düz (eski prosedürel)'}**"
+    f"🏛️ Ana baseline: `{ana_entry['name']}` · hiyerarşi: **{_hier_mode}**"
 )
 
-# --- Baseline seçici (col 2) ---------------------------------------------
-st.markdown("#### Baseline (paket içi seçim)")
-b_key = f"mv6_baseline_idx::{sel_pkg}"
-cur_b = max(0, min(st.session_state.get(b_key, 0), len(pkg_baselines) - 1))
-
-bcols = st.columns([1, 1, 6, 1])
-if bcols[0].button("◀", key=f"{b_key}_prev", disabled=cur_b == 0,
-                   help="Önceki baseline"):
-    st.session_state[b_key] = cur_b - 1
-    st.rerun()
-if bcols[1].button("▶", key=f"{b_key}_next",
-                   disabled=cur_b >= len(pkg_baselines) - 1,
-                   help="Sonraki baseline"):
-    st.session_state[b_key] = cur_b + 1
-    st.rerun()
-with bcols[2]:
-    picked = st.selectbox(
-        "Baseline",
-        options=list(range(len(pkg_baselines))),
-        index=cur_b,
-        format_func=lambda i: (
-            f"[{i + 1}/{len(pkg_baselines)}] "
-            f"{pkg_baselines[i]['name']}  ·  {pkg_baselines[i]['id'][:8]}"
-        ),
-        key=f"{b_key}_sel",
-        label_visibility="collapsed",
-    )
-    if picked != cur_b:
-        st.session_state[b_key] = picked
-        st.rerun()
-bcols[3].metric("Sıra", f"{cur_b + 1}/{len(pkg_baselines)}")
-
-baseline_entry = pkg_baselines[cur_b]
-
-# --- İhlalli seçici (col 3) — seçili baseline'a göre filtrelenmiş --------
-kids = violated_children(root, baseline_entry["id"])
-st.markdown(
-    f"#### İhlalli (`{baseline_entry['name']}` baseline'ından üretilen — "
-    f"{len(kids)} adet)"
-)
+# --- İhlalli seçici -----------------------------------------------------
+all_violateds = _all_violateds_under_ana(root, ana_entry["id"])
 violated_entry: dict | None = None
-if kids:
-    v_key = f"mv6_violated_idx::{baseline_entry['id']}"
-    cur_v = max(0, min(st.session_state.get(v_key, 0), len(kids) - 1))
+st.markdown(f"#### İhlalli ({len(all_violateds)} adet — ana'ya transitively bağlı)")
+if all_violateds:
+    v_key = f"mv_violated::{ana_entry['id']}"
+    cur_v = max(0, min(st.session_state.get(v_key, 0), len(all_violateds) - 1))
     vcols = st.columns([1, 1, 6, 1])
-    if vcols[0].button("◀", key=f"{v_key}_prev", disabled=cur_v == 0,
-                       help="Önceki ihlalli"):
+    if vcols[0].button("◀", key=f"{v_key}_p", disabled=cur_v == 0):
         st.session_state[v_key] = cur_v - 1
         st.rerun()
-    if vcols[1].button("▶", key=f"{v_key}_next",
-                       disabled=cur_v >= len(kids) - 1,
-                       help="Sonraki ihlalli"):
+    if vcols[1].button("▶", key=f"{v_key}_n",
+                       disabled=cur_v >= len(all_violateds) - 1):
         st.session_state[v_key] = cur_v + 1
         st.rerun()
     with vcols[2]:
-        picked_v = st.selectbox(
-            "İhlalli",
-            options=list(range(len(kids))),
+        picked = st.selectbox(
+            "İhlalli", options=list(range(len(all_violateds))),
             index=cur_v,
             format_func=lambda i: (
-                f"[{i + 1}/{len(kids)}] "
-                f"{kids[i]['name']}  ·  {kids[i]['id'][:8]}"
-            ),
-            key=f"{v_key}_sel",
-            label_visibility="collapsed",
+                f"[{i + 1}/{len(all_violateds)}] "
+                f"{all_violateds[i]['name']} · "
+                f"{all_violateds[i]['id'][:8]}"),
+            key=f"{v_key}_sel", label_visibility="collapsed",
         )
-        if picked_v != cur_v:
-            st.session_state[v_key] = picked_v
+        if picked != cur_v:
+            st.session_state[v_key] = picked
             st.rerun()
-    vcols[3].metric("Sıra", f"{cur_v + 1}/{len(kids)}")
-    violated_entry = kids[cur_v]
+    vcols[3].metric("Sıra", f"{cur_v + 1}/{len(all_violateds)}")
+    violated_entry = all_violateds[cur_v]
 else:
-    st.info("📭 Bu baseline'dan henüz ihlal üretilmemiş — col 3 boş gözükecek.")
+    st.info("📭 Bu pakette ihlalli IFC yok.")
+
+# --- Tahmin (model seçimi + inference) -----------------------------------
+st.markdown("#### 🤖 Tahmin")
+predicted_guids: set[str] = set()
+pred_info: dict = {}
+
+run_root = Path("runs")
+runs = _list_runs(run_root)
+mc = st.columns([3, 1, 1])
+with mc[0]:
+    if runs:
+        sel_run_idx = st.selectbox(
+            "Eğitim run (GAT modeli)",
+            options=list(range(len(runs))),
+            format_func=lambda i: runs[i].name,
+            key="mv_run",
+        )
+        sel_run = runs[sel_run_idx]
+    else:
+        st.warning("Henüz eğitilmiş model yok. Tahmin yapılamaz.")
+        sel_run = None
+with mc[1]:
+    threshold = st.slider("Eşik", 0.0, 1.0, 0.5, 0.05, key="mv_th")
+with mc[2]:
+    do_predict = st.button("🤖 Tahmin Yap", type="primary",
+                           disabled=(sel_run is None or violated_entry is None),
+                           use_container_width=True)
+
+# Cache son tahmini session state'te tut (ihlalli + run + eşik aynı kalırsa)
+pred_cache_key = f"mv_pred::{violated_entry['id'] if violated_entry else ''}"
+if do_predict and violated_entry and sel_run:
+    vio_sample = load_sample_for(violated_entry)
+    if vio_sample is None:
+        st.error("İhlalli IFC'nin graph'ı yok — sample yüklenemedi.")
+    else:
+        try:
+            with st.spinner("Model çalıştırılıyor..."):
+                pg, info = _run_inference(vio_sample, sel_run, threshold)
+            st.session_state[pred_cache_key] = {
+                "predicted": list(pg),
+                "info": info,
+                "run": sel_run.name,
+                "threshold": threshold,
+            }
+        except Exception as e:
+            st.error(f"Tahmin hatası: {e}")
+
+cached = st.session_state.get(pred_cache_key)
+if cached:
+    predicted_guids = set(cached.get("predicted", []))
+    pred_info = cached.get("info", {})
+    st.caption(
+        f"✓ Son tahmin: **{cached.get('run')}** · eşik {cached.get('threshold')} "
+        f"· {pred_info.get('n_predicted', 0)} ihlal tahmini"
+    )
 
 # --- Etiket katmanları ---------------------------------------------------
 st.markdown("#### Etiket katmanları")
 ovc = st.columns([2, 2, 3, 3])
-ov_vio = ovc[0].checkbox("🔴 İhlal", value=True, key="mv6_ov_vio")
-ov_decoy = ovc[1].checkbox("🟡 Decoy", value=True, key="mv6_ov_decoy")
+ov_vio = ovc[0].checkbox("🔴 Gerçek ihlal", value=True, key="mv_ov_vio")
+ov_decoy = ovc[1].checkbox("🟡 Decoy", value=True, key="mv_ov_decoy")
 ov_normal = ovc[2].checkbox("🟢 Etiketli-uygun (clean)", value=False,
-                            key="mv6_ov_normal")
+                            key="mv_ov_normal")
 if ovc[3].button("🧹 Seçimi temizle (cross-highlight)",
                  use_container_width=True):
     set_selected_node(None)
     st.rerun()
 
-# --- Sample'ları yükle ---------------------------------------------------
+# --- Büyütme kontrolü ---------------------------------------------------
+st.markdown("#### Görünüm")
+bc = st.columns(4)
+mxd = st.session_state.get("mv_maximized", None)  # None | "ana" | "vio" | "pred"
+if bc[0].button("⛶ Ana baseline büyüt", use_container_width=True,
+                disabled=(mxd == "ana")):
+    st.session_state["mv_maximized"] = "ana"
+    st.rerun()
+if bc[1].button("⛶ İhlalli büyüt", use_container_width=True,
+                disabled=(mxd == "vio")):
+    st.session_state["mv_maximized"] = "vio"
+    st.rerun()
+if bc[2].button("⛶ Tahmin büyüt", use_container_width=True,
+                disabled=(mxd == "pred")):
+    st.session_state["mv_maximized"] = "pred"
+    st.rerun()
+if bc[3].button("🔲 Küçült (3 sütun)", use_container_width=True,
+                disabled=(mxd is None)):
+    st.session_state["mv_maximized"] = None
+    st.rerun()
+
+# --- Sample'ları yükle --------------------------------------------------
 ana_sample = load_sample_for(ana_entry)
-baseline_sample = load_sample_for(baseline_entry)
 violated_sample = load_sample_for(violated_entry) if violated_entry else None
 
 # İhlal / decoy / normal kümeleri (sadece ihlalli sütunu için anlamlı)
@@ -298,93 +343,128 @@ vio_show = vio_set if ov_vio else set()
 dec_show = decoy_set if ov_decoy else set()
 nor_show = normal_set if ov_normal else set()
 
-# --- Seçili node (cross-highlight) ---------------------------------------
+# --- Seçili node (cross-highlight) --------------------------------------
 current = get_selected_node()
 all_guids: set[str] = set()
-for s in (ana_sample, baseline_sample, violated_sample):
+for s in (ana_sample, violated_sample):
     if s:
         all_guids.update(s.graph.nodes)
 if current not in all_guids:
     current = None
 
-# --- IFC mesh'leri -------------------------------------------------------
+# --- IFC mesh'leri ------------------------------------------------------
 ana_meshes = _safe_meshes(ana_entry.get("ifc_path"))
-baseline_meshes = _safe_meshes(baseline_entry.get("ifc_path"))
 violated_meshes = _safe_meshes(violated_entry["ifc_path"]) if violated_entry else None
+# Tahmin sütunu için: ihlalli'nin IFC + graph'ı kullanılır, ama vurgu predicted_guids
+pred_meshes = violated_meshes
+pred_sample = violated_sample
 
-PANEL_H_3D = 380
-PANEL_H_GR = 380
+PANEL_H_3D_GRID = 380
+PANEL_H_3D_FULL = 720
+PANEL_H_GR_GRID = 380
+PANEL_H_GR_FULL = 600
 
 
 def _render_ifc(col, title: str, meshes, *,
                 vio: set = set(), decoy: set = set(), normal: set = set(),
+                pred: set = set(), height: int = PANEL_H_3D_GRID,
                 key: str) -> None:
     with col:
         st.markdown(f"##### {title}")
         if meshes is None:
-            st.info("📭 Veri üretilmemiş")
+            st.info("📭 Gösterilecek veri yok")
             return
+        # Tahmin sütununda predicted_guids "yeşil" yerine biz ona ihlal rengi
+        # (kırmızı) gösteriyoruz; bu daha sezgisel: "model bunu ihlal sayıyor".
+        # build_figure violation_guids=kırmızı/parlak; pred için onu kullanıyoruz.
+        merged_vio = vio | pred
         fig = build_figure(
-            meshes, violation_guids=vio, decoy_guids=decoy,
-            normal_guids=normal, selected_guid=current, height=PANEL_H_3D,
+            meshes, violation_guids=merged_vio, decoy_guids=decoy,
+            normal_guids=normal, selected_guid=current, height=height,
         )
         st.plotly_chart(fig, use_container_width=True, key=f"ifc_{key}")
 
 
 def _render_graph(col, title: str, sample, *,
                   vio: set = set(), decoy: set = set(), normal: set = set(),
+                  pred: set = set(), height: int = PANEL_H_GR_GRID,
                   key: str) -> None:
     with col:
         st.markdown(f"##### Graph · {title}")
         if sample is None:
-            st.info("📭 Veri üretilmemiş")
+            st.info("📭 Gösterilecek veri yok")
             return
+        merged_vio = vio | pred
         clicked = interactive_agraph(
             sample.graph,
-            violation_guids=vio, decoy_guids=decoy, normal_guids=normal,
-            selected_guid=current, height=PANEL_H_GR, key=f"graph_{key}",
+            violation_guids=merged_vio, decoy_guids=decoy,
+            normal_guids=normal, selected_guid=current,
+            height=height, key=f"graph_{key}",
         )
         if clicked and clicked != current:
             set_selected_node(clicked)
             st.rerun()
 
 
-# --- 3D row --------------------------------------------------------------
+# --- Render based on maximized state -----------------------------------
 st.divider()
-st.markdown("### 🧱 3D Görselleştirme")
-c1, c2, c3 = st.columns(3)
-_render_ifc(c1, f"Ana baseline · `{ana_entry['name']}`", ana_meshes,
-            key="ana_ifc")
-_render_ifc(c2, f"Baseline · `{baseline_entry['name']}`", baseline_meshes,
-            key="bsl_ifc")
-_render_ifc(c3,
-            f"İhlalli · `{violated_entry['name']}`" if violated_entry
-            else "İhlalli",
-            violated_meshes, vio=vio_show, decoy=dec_show, normal=nor_show,
-            key="vio_ifc")
+mxd = st.session_state.get("mv_maximized", None)
 
-# --- Graph row -----------------------------------------------------------
-st.markdown("### 🕸️ Graph (node tıkla → vurgula · sürükle → yeniden düzenle)")
-g1, g2, g3 = st.columns(3)
-_render_graph(g1, "Ana baseline", ana_sample, key="ana_g")
-_render_graph(g2, "Baseline", baseline_sample, key="bsl_g")
-_render_graph(g3, "İhlalli", violated_sample,
-              vio=vio_show, decoy=dec_show, normal=nor_show, key="vio_g")
+if mxd == "ana":
+    st.markdown("### 🏛️ Ana baseline (büyütülmüş)")
+    _render_ifc(st, f"Ana baseline · `{ana_entry['name']}`", ana_meshes,
+                height=PANEL_H_3D_FULL, key="ana_full")
+    _render_graph(st, "Ana baseline", ana_sample,
+                  height=PANEL_H_GR_FULL, key="ana_full_g")
+elif mxd == "vio":
+    st.markdown("### 💥 İhlalli (büyütülmüş)")
+    _render_ifc(st,
+                f"İhlalli · `{violated_entry['name'] if violated_entry else '—'}`",
+                violated_meshes, vio=vio_show, decoy=dec_show, normal=nor_show,
+                height=PANEL_H_3D_FULL, key="vio_full")
+    _render_graph(st, "İhlalli", violated_sample,
+                  vio=vio_show, decoy=dec_show, normal=nor_show,
+                  height=PANEL_H_GR_FULL, key="vio_full_g")
+elif mxd == "pred":
+    st.markdown("### 🤖 Tahmin (büyütülmüş)")
+    title = (f"Tahmin · run=`{cached.get('run')}`" if cached
+             else "Tahmin (henüz çalıştırılmadı)")
+    _render_ifc(st, title, pred_meshes,
+                pred=predicted_guids,
+                height=PANEL_H_3D_FULL, key="pred_full")
+    _render_graph(st, title, pred_sample,
+                  pred=predicted_guids,
+                  height=PANEL_H_GR_FULL, key="pred_full_g")
+else:
+    # --- 3D row (3 sütun) ----------------------------------------------
+    st.markdown("### 🧱 3D Görselleştirme")
+    c1, c2, c3 = st.columns(3)
+    _render_ifc(c1, f"Ana baseline · `{ana_entry['name']}`", ana_meshes,
+                key="ana_ifc")
+    _render_ifc(c2,
+                f"İhlalli · `{violated_entry['name']}`" if violated_entry
+                else "İhlalli",
+                violated_meshes, vio=vio_show, decoy=dec_show, normal=nor_show,
+                key="vio_ifc")
+    pred_title = (f"Tahmin · `{cached.get('run')}` · eşik {cached.get('threshold')}"
+                  if cached else "Tahmin")
+    _render_ifc(c3, pred_title, pred_meshes,
+                pred=predicted_guids if cached else set(),
+                key="pred_ifc")
 
-# --- LLM prompt expander'ları (her sütun için) --------------------------
-st.markdown("### 🤖 Üretim prompt'ları")
-p1, p2, p3 = st.columns(3)
-with p1:
-    _ifc_prompt_panel(ana_entry, key="ana baseline")
-with p2:
-    _ifc_prompt_panel(baseline_entry, key="baseline")
-with p3:
-    _ifc_prompt_panel(violated_entry, key="ihlalli")
+    # --- Graph row -----------------------------------------------------
+    st.markdown("### 🕸️ Graph (node tıkla → vurgula · sürükle → düzenle)")
+    g1, g2, g3 = st.columns(3)
+    _render_graph(g1, "Ana baseline", ana_sample, key="ana_g")
+    _render_graph(g2, "İhlalli", violated_sample,
+                  vio=vio_show, decoy=dec_show, normal=nor_show, key="vio_g")
+    _render_graph(g3, pred_title, pred_sample,
+                  pred=predicted_guids if cached else set(), key="pred_g")
 
-# --- Inspector -----------------------------------------------------------
+# --- Inspector ----------------------------------------------------------
 if current:
     src_g = None
-    for s in (violated_sample, baseline_sample, ana_sample):
+    for s in (violated_sample, ana_sample):
         if s and current in s.graph.nodes:
             src_g = s.graph
             break
@@ -403,8 +483,10 @@ if current:
             st.markdown("**Etiketler**")
             is_v = current in vio_set
             is_d = current in decoy_set
-            st.write("• İhlal mi?", "✅ Evet" if is_v else "—")
-            st.write("• Decoy mi?", "🪤 Evet" if is_d else "—")
+            is_p = current in predicted_guids
+            st.write("• Gerçek ihlal?", "✅" if is_v else "—")
+            st.write("• Decoy?", "🪤" if is_d else "—")
+            st.write("• Model tahmini ihlal?", "🤖✅" if is_p else "—")
             if violated_entry:
                 doc = labels_summary(violated_entry) or {}
                 match = [l for l in doc.get("labels", [])
@@ -412,11 +494,8 @@ if current:
                 if match:
                     lab = match[0]
                     if lab.get("attribute"):
-                        st.write(
-                            f"`{lab['attribute']}`: "
-                            f"{lab.get('before') if 'before' in lab else lab.get('value_before')}"
-                            f" → "
-                            f"{lab.get('after') if 'after' in lab else lab.get('value_after')}"
-                        )
+                        bef = lab.get("before") or lab.get("value_before")
+                        aft = lab.get("after") or lab.get("value_after")
+                        st.write(f"`{lab['attribute']}`: {bef} → {aft}")
                     with st.expander("Tam etiket"):
                         st.json(lab, expanded=False)
