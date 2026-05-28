@@ -119,22 +119,57 @@ class DesignPlan:
         }
 
 
+def _build_constraints_block(constraints: dict | None) -> str:
+    """Kullanıcının UI'dan verdiği zorunlu sayıları prompt'a struct'lı blok olarak çevir."""
+    if not constraints:
+        return ""
+    parts = []
+    n_oda = constraints.get("n_rooms")
+    n_salon = constraints.get("n_salons")
+    n_kor = constraints.get("n_corridors")
+    if n_oda is not None:
+        parts.append(f"- Oda sayısı (kat başına): {int(n_oda)}")
+    if n_salon is not None:
+        parts.append(f"- Salon sayısı (kat başına): {int(n_salon)}")
+    if n_kor is not None:
+        parts.append(f"- Koridor sayısı (kat başına): {int(n_kor)} "
+                     f"({'straight' if int(n_kor) <= 1 else 'lshape'} layout demektir)")
+    if not parts:
+        return ""
+    return (
+        "\n\n⚠️ ZORUNLU KISITLAR (kullanıcı talebi, kesinlikle uy):\n"
+        + "\n".join(parts)
+        + "\n  → n_rooms_per_floor = oda + salon toplamı\n"
+        + "  → layout 'lshape' iff koridor sayısı 2; aksi 'straight'\n"
+    )
+
+
 def plan_ana_baseline(user_template: str, *,
+                      constraints: dict | None = None,
                       model: str = "gpt-4o", seed: int = 0) -> DesignPlan:
     """Ana baseline için tek LLM çağrısı.
 
-    user_template: kullanıcının text_area'ya yazdığı bina tarifi
-        (örn. "Küçük bir ofis binası, 2-3 oda + koridor, 100 m²").
+    Args:
+        user_template: kullanıcının text_area'ya yazdığı bina tarifi.
+        constraints: opsiyonel UI kısıtları {n_rooms, n_salons, n_corridors}.
+            Prompt'a ZORUNLU blok olarak eklenir; baseline_pipeline ayrıca
+            LLM çıktısını bu değerlere göre clamp eder.
     """
     sys = SYSTEM_PROMPT
     usr = (f"Bina tasarımı talebi (template):\n{user_template.strip()}\n\n"
-           f"Tasarım tohumu: {seed}")
+           f"Tasarım tohumu: {seed}"
+           f"{_build_constraints_block(constraints)}")
     return _call_llm(sys, usr, model)
 
 
 def plan_variant_baseline(user_template: str, ana_plan: DesignPlan, *,
+                          constraints: dict | None = None,
                           model: str = "gpt-4o", seed: int = 1) -> DesignPlan:
-    """Ana baseline'a varyasyon olarak yeni baseline için LLM çağrısı."""
+    """Ana baseline'a varyasyon olarak yeni baseline için LLM çağrısı.
+
+    constraints verilirse varyantlarda da aynı ZORUNLU kısıt korunur
+    (oda/salon/koridor sayıları sabit, varyasyon başka boyutlarda olur).
+    """
     ana_summary = json.dumps({
         "n_storeys": ana_plan.n_storeys,
         "n_rooms_per_floor": ana_plan.n_rooms_per_floor,
@@ -145,7 +180,8 @@ def plan_variant_baseline(user_template: str, ana_plan: DesignPlan, *,
         ana_summary=ana_summary, seed=seed,
     )
     usr = (f"Bina tasarımı talebi (template):\n{user_template.strip()}\n\n"
-           f"Bu, ana baseline'ın varyasyonu #{seed}'tir.")
+           f"Bu, ana baseline'ın varyasyonu #{seed}'tir."
+           f"{_build_constraints_block(constraints)}")
     return _call_llm(sys, usr, model)
 
 

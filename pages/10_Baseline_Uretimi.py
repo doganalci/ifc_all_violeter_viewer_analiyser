@@ -94,10 +94,43 @@ default_prompt = (
 user_template = st.text_area(
     "💬 Bina tarifi",
     value=default_prompt, height=180,
-    help="Bina tipi, oda sayısı, kat sayısı, layout istekleri vs. LLM "
-         "bunu okuyup TASARIM PARAMETRELERİ (JSON) üretir. "
-         "Prosedürel motor bunları geçerli IFC'ye çevirir."
+    help="Bina tipi, kat sayısı, layout istekleri vs. LLM bunu okuyup "
+         "TASARIM PARAMETRELERİ (JSON) üretir. Aşağıdaki sayılar prompt'a "
+         "ZORUNLU kısıt olarak eklenir."
 )
+
+# --- Zorunlu sayısal kısıtlar (prompt'a dinamik enjekte) ----------------
+st.markdown("**🔢 Zorunlu sayılar** (prompt'a otomatik eklenir, kod tarafında zorlanır)")
+ncc = st.columns(3)
+with ncc[0]:
+    n_oda_in = st.number_input(
+        "🚪 Oda sayısı (kat başına)", min_value=1, max_value=4, value=2,
+        help="Salon + oda toplamı 2-4 olmalı. Salon dahil değil.",
+    )
+with ncc[1]:
+    n_salon_in = st.number_input(
+        "🛋️ Salon sayısı (kat başına)", min_value=0, max_value=3, value=1,
+        help="0 = sadece odalar. ≥1 = ilk N büyük oda 'Salon' olarak adlandırılır.",
+    )
+with ncc[2]:
+    n_kor_in = st.number_input(
+        "🚶 Koridor sayısı (kat başına)", min_value=1, max_value=2, value=1,
+        help="1 = straight (merkez koridor). 2 = lshape (iki perpendiküler).",
+    )
+
+# Doğrulama
+n_total_rooms = int(n_oda_in) + int(n_salon_in)
+if n_total_rooms < 2 or n_total_rooms > 4:
+    st.error(
+        f"⚠️ Oda + salon toplamı 2-4 arası olmalı. Şu an: {n_total_rooms}."
+    )
+    constraints_valid = False
+else:
+    st.caption(
+        f"✓ Toplam {n_total_rooms} oda+salon · "
+        f"layout `{'lshape' if int(n_kor_in) == 2 else 'straight'}` zorlanacak"
+    )
+    constraints_valid = True
 
 
 # --- 3. LLM modeli + üretim params --------------------------------------
@@ -210,7 +243,7 @@ with st.expander("🔬 Sistem promptu (LLM rolü) — önizleme", expanded=False
 # --- 4. Çalıştır --------------------------------------------------------
 st.subheader("4. Üret")
 if st.button("🏠 LLM ile baseline'ları üret", type="primary",
-             use_container_width=True):
+             use_container_width=True, disabled=not constraints_valid):
     bar = st.progress(0.0, text="başlatılıyor...")
     log_slot = st.empty()
     logs: list[str] = []
@@ -243,6 +276,11 @@ if st.button("🏠 LLM ile baseline'ları üret", type="primary",
             seed_start=int(seed_start),
             model=model.strip() or "gpt-4o",
             params=g_params,
+            constraints={
+                "n_rooms": int(n_oda_in),
+                "n_salons": int(n_salon_in),
+                "n_corridors": int(n_kor_in),
+            },
             progress_cb=_cb,
         )
     except Exception as e:

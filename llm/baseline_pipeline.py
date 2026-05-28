@@ -31,11 +31,33 @@ from llm.excel_log import log_llm_generation
 from ml.data.synth_baseline_v2 import SynthParamsV2, generate_v2
 
 
+def _apply_constraints(plan: DesignPlan, constraints: dict | None) -> DesignPlan:
+    """LLM çıktısını UI kısıtlarına göre clamp et (zorunlu sayıları zorla).
+
+    constraints: {n_rooms, n_salons, n_corridors} — verilen alanlar zorlanır,
+    None olanlar LLM'in seçtiği değerde kalır.
+    """
+    if not constraints:
+        return plan
+    n_rooms = constraints.get("n_rooms")
+    n_salons = constraints.get("n_salons")
+    n_corridors = constraints.get("n_corridors")
+    if n_rooms is not None or n_salons is not None:
+        total = (int(n_rooms) if n_rooms is not None else 0) + \
+                (int(n_salons) if n_salons is not None else 0)
+        if total >= 2:
+            plan.n_rooms_per_floor = max(2, min(4, total))
+    if n_corridors is not None:
+        plan.layout = "lshape" if int(n_corridors) >= 2 else "straight"
+    return plan
+
+
 def run_baseline_pipeline(user_template: str,
                           dataset_tag: str, *,
                           variants: int = 5, seed_start: int = 0,
                           model: str = "gpt-4o",
                           params: SynthParamsV2 | None = None,
+                          constraints: dict | None = None,
                           progress_cb=None) -> dict:
     """Ana baseline + N varyant LLM ile üretir, dosya + DB + defterler.
 
@@ -62,6 +84,10 @@ def run_baseline_pipeline(user_template: str,
     out_dir = settings.ifc_dir / "baseline"
     out_dir.mkdir(parents=True, exist_ok=True)
     params = params or SynthParamsV2()
+    # UI'daki salon sayısı params.n_salons'a yansıtılır → çizici motor
+    # ilk N odayı "Salon" olarak adlandırır.
+    if constraints and constraints.get("n_salons") is not None:
+        params.n_salons = int(constraints["n_salons"])
 
     total = 1 + variants
     done = 0
@@ -79,8 +105,11 @@ def run_baseline_pipeline(user_template: str,
     ana_path: str | None = None
     ana_stem = f"{dataset_tag}_ana_{seed_start:05d}"
     try:
-        ana_plan = plan_ana_baseline(user_template, model=model,
-                                     seed=seed_start)
+        ana_plan = plan_ana_baseline(
+            user_template, constraints=constraints,
+            model=model, seed=seed_start,
+        )
+        ana_plan = _apply_constraints(ana_plan, constraints)
     except Exception as e:
         errors.append(f"ana baseline · LLM çağrısı hata: {e}")
         log_llm_generation(
@@ -168,8 +197,11 @@ def run_baseline_pipeline(user_template: str,
         var_path = out_dir / f"{var_stem}.ifc"
         try:
             var_plan = plan_variant_baseline(
-                user_template, ana_plan, model=model, seed=var_seed,
+                user_template, ana_plan,
+                constraints=constraints,
+                model=model, seed=var_seed,
             )
+            var_plan = _apply_constraints(var_plan, constraints)
         except Exception as e:
             errors.append(f"varyant {var_seed} · LLM hata: {e}")
             log_llm_generation(

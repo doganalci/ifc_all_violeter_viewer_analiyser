@@ -61,6 +61,7 @@ class SynthParamsV2:
     n_rooms_per_floor: int = 3        # 2-4 (corridor + N kanat)
     n_storeys: int = 1                # 1-3
     layout: str = "straight"          # "straight" | "lshape"
+    n_salons: int = 0                 # 0-N: kaç oda "Salon" olarak adlandırılsın
 
     # LLM'in açıkça vereceği plan (varsa make_spec_v2 onu override kabul eder).
     # Şema: { "storeys": [{"name", "elevation", "layout", "n_rooms",
@@ -110,6 +111,16 @@ _STRAIGHT_SIDES_BY_COUNT = {
     3: ("west", "east", "north"),
     4: ("west", "east", "north", "south"),
 }
+
+
+def _room_name(idx: int, n_total: int, n_salons: int) -> str:
+    """İlk n_salons odayı 'Salon' olarak adlandır, gerisini 'Oda_N'."""
+    n_salons = max(0, min(n_salons, n_total))
+    if idx < n_salons:
+        return f"Salon_{idx + 1}" if n_salons > 1 else "Salon"
+    oda_idx = idx - n_salons
+    n_odas = n_total - n_salons
+    return f"Oda_{oda_idx + 1}" if n_odas > 1 else "Oda"
 
 
 def _draw_straight(rng: random.Random, p: SynthParamsV2, n_rooms: int,
@@ -162,7 +173,7 @@ def _draw_straight(rng: random.Random, p: SynthParamsV2, n_rooms: int,
             door_side = "north"
             wall_len = rw
 
-        rname = f"Oda_{side[0].upper()}"
+        rname = _room_name(idx, n_rooms, p.n_salons)
         rooms_out.append({"name": rname, "origin": origin, "size": size})
         occupied_sides.add(side)
 
@@ -248,11 +259,9 @@ def _draw_lshape(rng: random.Random, p: SynthParamsV2, n_rooms: int,
     ]
 
     # Yerleşim slotları (giriş için south_H her zaman boş bırakılır)
-    slots = [
-        ("Oda_W", "west_H"),
-        ("Oda_E", "east_V"),
-        ("Oda_N", "north_V"),
-    ][:n_rooms]
+    _slot_positions = ["west_H", "east_V", "north_V"][:n_rooms]
+    slots = [(_room_name(i, n_rooms, p.n_salons), sl)
+             for i, sl in enumerate(_slot_positions)]
 
     cor_h_cx, cor_h_cy = cl_h / 2.0, cw / 2.0
     cor_v_cx = cl_h - cw / 2.0
