@@ -134,6 +134,88 @@ n_doors_range = st.slider(
          "yaparsan tüm odalar aynı sayıda olur.",
 )
 
+# --- Gelişmiş ayarlar (LLM'e tercih aralıkları olarak iletilir) ---------
+with st.expander(
+    "🔧 Gelişmiş ayarlar — boyut aralıkları (LLM'e tercih olarak iletilir)",
+    expanded=False,
+):
+    st.caption(
+        "Buradaki aralıklar **prompt'a 'tercih edilen aralık' olarak eklenir**. "
+        "LLM bunları okur ve gerektiğinde uyar; zorunlu değil. Default değerler "
+        "makul (mevzuata uygun). Çok dar bir aralık verirsen LLM o aralıkta "
+        "kalmaya çalışır."
+    )
+    use_advanced = st.checkbox(
+        "Gelişmiş ayarları LLM prompt'una ekle",
+        value=False,
+        help="Kapalıysa: LLM tamamen serbest karar verir. Açıksa: aralıklar "
+             "prompt'a tercih olarak girer.",
+    )
+
+    ac1, ac2 = st.columns(2)
+    with ac1:
+        st.markdown("**Oda boyutu (m)**")
+        adv_room_w = st.slider(
+            "Oda genişliği (en)",
+            min_value=2.0, max_value=8.0, value=(3.0, 5.5), step=0.1,
+            key="adv_rw",
+        )
+        adv_room_l = st.slider(
+            "Oda boyu",
+            min_value=2.0, max_value=10.0, value=(3.5, 6.0), step=0.1,
+            key="adv_rl",
+        )
+        st.markdown("**Kapı (m)**")
+        adv_door_w = st.slider(
+            "Kapı genişliği",
+            min_value=0.90, max_value=1.50, value=(0.95, 1.20), step=0.05,
+            key="adv_dw",
+            help="≥ 0.90 m (TS 9111).",
+        )
+        adv_door_h = st.slider(
+            "Kapı yüksekliği",
+            min_value=2.00, max_value=2.50, value=(2.10, 2.30), step=0.05,
+            key="adv_dh",
+            help="≥ 2.00 m (TS 9111).",
+        )
+    with ac2:
+        st.markdown("**Koridor (m)**")
+        adv_corridor_w = st.slider(
+            "Koridor genişliği",
+            min_value=1.20, max_value=3.00, value=(1.40, 2.20), step=0.1,
+            key="adv_cw",
+            help="≥ 1.20 m (TS 9111).",
+        )
+        adv_corridor_l = st.slider(
+            "Koridor uzunluğu",
+            min_value=2.0, max_value=10.0, value=(3.0, 6.0), step=0.1,
+            key="adv_cl",
+        )
+        st.markdown("**Yapı (m)**")
+        adv_wall_t = st.slider(
+            "Duvar kalınlığı",
+            min_value=0.10, max_value=0.40, value=0.20, step=0.05,
+            key="adv_wt",
+        )
+        adv_storey_h = st.slider(
+            "Kat yüksekliği",
+            min_value=2.70, max_value=3.50, value=(2.80, 3.20), step=0.05,
+            key="adv_sh",
+        )
+
+    if use_advanced:
+        # Mevzuat uyarısı
+        if (adv_door_w[0] < 0.90 or adv_door_h[0] < 2.00
+                or adv_corridor_w[0] < 1.20):
+            st.warning(
+                "⚠️ Bazı min değerler TS 9111 eşiğinin altında. "
+                "LLM yine eşik altına inmemeli ama prompt'a 'tercih' "
+                "olarak böyle gönderiyorsun."
+            )
+        st.caption(
+            "✓ Bu aralıklar prompt'a **TERCİH EDİLEN ARALIKLAR** olarak girecek."
+        )
+
 # Doğrulama
 n_total_rooms = int(n_oda_in) + int(n_salon_in)
 if n_total_rooms < 2 or n_total_rooms > 4:
@@ -247,6 +329,19 @@ if st.button("🏠 LLM ile baseline'ları üret", type="primary",
                 "n_storeys": int(n_kat_in),
                 "n_doors_min": int(n_doors_range[0]),
                 "n_doors_max": int(n_doors_range[1]),
+                "prefs": (
+                    {
+                        "room_w": list(adv_room_w),
+                        "room_l": list(adv_room_l),
+                        "corridor_w": list(adv_corridor_w),
+                        "corridor_l": list(adv_corridor_l),
+                        "door_w": list(adv_door_w),
+                        "door_h": list(adv_door_h),
+                        "wall_t": float(adv_wall_t),
+                        "storey_h": list(adv_storey_h),
+                    }
+                    if use_advanced else None
+                ),
             },
             progress_cb=_cb,
         )
@@ -266,7 +361,7 @@ if st.button("🏠 LLM ile baseline'ları üret", type="primary",
     with st.expander("🔬 Parametre denetimi (UI zorla + LLM kararı + motor çıktısı)",
                      expanded=False):
         st.markdown("**UI'dan zorlanan kısıtlar:**")
-        st.json({
+        sent_audit = {
             "🚪 Oda sayısı": int(n_oda_in),
             "🛋️ Salon sayısı": int(n_salon_in),
             "🚶 Koridor sayısı": int(n_kor_in),
@@ -275,7 +370,19 @@ if st.button("🏠 LLM ile baseline'ları üret", type="primary",
             "Toplam oda+salon": n_total_rooms,
             "Layout (zorlanan)": (
                 "lshape" if int(n_kor_in) == 2 else "straight"),
-        }, expanded=True)
+        }
+        if use_advanced:
+            sent_audit["🔧 Gelişmiş tercihler (prompt'a)"] = {
+                "oda_genislik": list(adv_room_w),
+                "oda_boy": list(adv_room_l),
+                "koridor_genislik": list(adv_corridor_w),
+                "koridor_uzunluk": list(adv_corridor_l),
+                "kapi_genislik": list(adv_door_w),
+                "kapi_yukseklik": list(adv_door_h),
+                "duvar_kalinlik": float(adv_wall_t),
+                "kat_yukseklik": list(adv_storey_h),
+            }
+        st.json(sent_audit, expanded=True)
 
         st.markdown("**Her IFC için LLM'in seçtiği boyutlar:**")
         ifc_rows = []

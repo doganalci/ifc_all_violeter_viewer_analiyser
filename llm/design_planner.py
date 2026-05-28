@@ -199,15 +199,46 @@ def _build_constraints_block(constraints: dict | None) -> str:
     if n_doors_min is not None and n_doors_max is not None:
         parts.append(f"- Oda başına kapı sayısı: {int(n_doors_min)}-{int(n_doors_max)} arası "
                      f"(her oda için n_doors alanına kendi tercihin)")
-    if not parts:
-        return ""
-    return (
-        "\n\n⚠️ ZORUNLU KISITLAR (kullanıcı talebi, kesinlikle uy):\n"
-        + "\n".join(parts)
-        + "\n  → n_storeys = kullanıcının verdiği kat sayısı\n"
-        + "  → n_rooms_per_floor = oda + salon toplamı\n"
-        + "  → layout 'lshape' iff koridor sayısı 2; aksi 'straight'\n"
-    )
+
+    block = ""
+    if parts:
+        block += (
+            "\n\n⚠️ ZORUNLU KISITLAR (kullanıcı talebi, kesinlikle uy):\n"
+            + "\n".join(parts)
+            + "\n  → n_storeys = kullanıcının verdiği kat sayısı\n"
+            + "  → n_rooms_per_floor = oda + salon toplamı\n"
+            + "  → layout 'lshape' iff koridor sayısı 2; aksi 'straight'\n"
+        )
+
+    # Tercih edilen aralıklar (advanced setup'tan, opsiyonel)
+    prefs = constraints.get("prefs") or {}
+    if prefs:
+        pref_lines = []
+        if "room_w" in prefs:
+            pref_lines.append(f"- Oda genişliği (m): {prefs['room_w'][0]}-{prefs['room_w'][1]}")
+        if "room_l" in prefs:
+            pref_lines.append(f"- Oda boyu (m): {prefs['room_l'][0]}-{prefs['room_l'][1]}")
+        if "corridor_w" in prefs:
+            pref_lines.append(f"- Koridor genişliği (m): {prefs['corridor_w'][0]}-{prefs['corridor_w'][1]}")
+        if "corridor_l" in prefs:
+            pref_lines.append(f"- Koridor uzunluğu (m): {prefs['corridor_l'][0]}-{prefs['corridor_l'][1]}")
+        if "door_w" in prefs:
+            pref_lines.append(f"- Kapı genişliği (m): {prefs['door_w'][0]}-{prefs['door_w'][1]}")
+        if "door_h" in prefs:
+            pref_lines.append(f"- Kapı yüksekliği (m): {prefs['door_h'][0]}-{prefs['door_h'][1]}")
+        if "wall_t" in prefs:
+            pref_lines.append(f"- Duvar kalınlığı (m): {prefs['wall_t']}")
+        if "storey_h" in prefs:
+            pref_lines.append(f"- Kat yüksekliği (m): {prefs['storey_h'][0]}-{prefs['storey_h'][1]}")
+        if pref_lines:
+            block += (
+                "\n💡 TERCİH EDİLEN ARALIKLAR (kullanıcının önerisi, mecbur değil "
+                "ama tercihen bu aralıkta seç):\n"
+                + "\n".join(pref_lines)
+                + "\n"
+            )
+
+    return block
 
 
 def plan_ana_baseline(user_template: str, *,
