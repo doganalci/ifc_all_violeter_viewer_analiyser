@@ -223,7 +223,35 @@ def _draw_straight(rng: random.Random, p: SynthParamsV2, n_rooms: int,
             "is_exterior": False, "name": f"{rname}-Koridor",
         })
 
+        # Ek kapılar (n_doors > 1 ise) — odanın dış cephe duvarlarına
+        n_doors_room = 1
+        if override_rooms and idx < len(override_rooms):
+            n_doors_room = int(override_rooms[idx].get("n_doors", 1) or 1)
+        n_doors_room = max(1, min(4, n_doors_room))
+        n_extra = n_doors_room - 1
+
+        # Hangi cephelere ek kapı konabilir (öncelik sırası)
+        extra_sides_priority = {
+            "west":  ["west", "north", "south"],   # corridor on east, extras on opposite + perpendiculars
+            "east":  ["east", "north", "south"],
+            "north": ["north", "east", "west"],
+            "south": ["south", "east", "west"],
+        }[side]
+        room_door_walls: set[str] = {door_side}  # corridor side
+        for esid in extra_sides_priority[:n_extra]:
+            ew_len = rw if esid in ("north", "south") else rl
+            if ew_len - dw < 0.4:
+                continue
+            e_off = _clamp((ew_len - dw) / 2.0, 0.10, ew_len - dw - 0.10)
+            openings.append({
+                "room": rname, "side": esid, "type": "door",
+                "width": dw, "height": dh, "offset": e_off,
+                "is_exterior": True, "name": f"{rname}-Kapi-{esid}",
+            })
+            room_door_walls.add(esid)
+
         # Dış pencere — odanın koridordan uzak iç-dış kenarı
+        # (eğer o duvarda zaten ek kapı yoksa)
         if p.add_windows:
             ext_side, ext_wall_len = {
                 "west":  ("west",  rl),
@@ -231,14 +259,15 @@ def _draw_straight(rng: random.Random, p: SynthParamsV2, n_rooms: int,
                 "north": ("north", rw),
                 "south": ("south", rw),
             }[side]
-            ww = min(1.5, ext_wall_len - 0.4)
-            if ww >= 0.6:
-                openings.append({
-                    "room": rname, "side": ext_side, "type": "window",
-                    "width": ww, "height": 1.4, "sill": 0.9,
-                    "offset": max(0.2, (ext_wall_len - ww) / 2.0),
-                    "is_exterior": True,
-                })
+            if ext_side not in room_door_walls:
+                ww = min(1.5, ext_wall_len - 0.4)
+                if ww >= 0.6:
+                    openings.append({
+                        "room": rname, "side": ext_side, "type": "window",
+                        "width": ww, "height": 1.4, "sill": 0.9,
+                        "offset": max(0.2, (ext_wall_len - ww) / 2.0),
+                        "is_exterior": True,
+                    })
 
     # Zemin katta dış giriş kapısı — koridorun boş kenarına
     if is_ground:
@@ -367,7 +396,34 @@ def _draw_lshape(rng: random.Random, p: SynthParamsV2, n_rooms: int,
             "width": dw, "height": dh, "offset": offset,
             "is_exterior": False, "name": f"{rname}-Koridor",
         })
-        if p.add_windows:
+
+        # Ek kapılar (n_doors > 1 ise)
+        n_doors_room = 1
+        if override_rooms and slot_idx < len(override_rooms):
+            n_doors_room = int(override_rooms[slot_idx].get("n_doors", 1) or 1)
+        n_doors_room = max(1, min(4, n_doors_room))
+        n_extra = n_doors_room - 1
+
+        # L-plan'da extra cephe sırası (door_side koridora bakar)
+        extra_sides_priority = {
+            "east":  ["west", "north", "south"],   # west_H room — corridor on east
+            "west":  ["east", "north", "south"],   # east_V room — corridor on west
+            "south": ["north", "east", "west"],    # north_V room — corridor on south
+        }.get(door_side, [])
+        room_door_walls: set[str] = {door_side}
+        for esid in extra_sides_priority[:n_extra]:
+            ew_len = rw if esid in ("north", "south") else rl
+            if ew_len - dw < 0.4:
+                continue
+            e_off = _clamp((ew_len - dw) / 2.0, 0.10, ew_len - dw - 0.10)
+            openings.append({
+                "room": rname, "side": esid, "type": "door",
+                "width": dw, "height": dh, "offset": e_off,
+                "is_exterior": True, "name": f"{rname}-Kapi-{esid}",
+            })
+            room_door_walls.add(esid)
+
+        if p.add_windows and ext_side not in room_door_walls:
             ww = min(1.5, (rl if ext_side in ("west", "east") else rw) - 0.4)
             if ww >= 0.6:
                 ext_wall_len = rl if ext_side in ("west", "east") else rw

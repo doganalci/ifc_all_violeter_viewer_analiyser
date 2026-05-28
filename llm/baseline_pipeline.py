@@ -55,6 +55,17 @@ def _apply_constraints(plan: DesignPlan, constraints: dict | None) -> DesignPlan
             plan.n_rooms_per_floor = max(2, min(4, total))
     if n_corridors is not None:
         plan.layout = "lshape" if int(n_corridors) >= 2 else "straight"
+    # Oda başına kapı sayısı: LLM çıktısını kullanıcı aralığına clamp et
+    n_doors_min = constraints.get("n_doors_min")
+    n_doors_max = constraints.get("n_doors_max")
+    if (n_doors_min is not None or n_doors_max is not None) and plan.rooms:
+        lo = int(n_doors_min) if n_doors_min is not None else 1
+        hi = int(n_doors_max) if n_doors_max is not None else 4
+        lo = max(1, min(4, lo))
+        hi = max(lo, min(4, hi))
+        for r in plan.rooms:
+            n_d = int(r.get("n_doors", 1) or 1)
+            r["n_doors"] = max(lo, min(hi, n_d))
     return plan
 
 

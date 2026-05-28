@@ -37,8 +37,8 @@ ZORUNLU JSON şeması (her alan zorunlu, ek alan ekleme):
     "length": <float 3.0-8.0>
   },
   "rooms": [                                  // tam (oda+salon) sayısı kadar
-    {"role": "salon", "width": <float 2.5-7>, "length": <float 2.5-7>},
-    {"role": "oda",   "width": <float 2.5-7>, "length": <float 2.5-7>}
+    {"role": "salon", "width": <float 2.5-7>, "length": <float 2.5-7>, "n_doors": <int 1-4>},
+    {"role": "oda",   "width": <float 2.5-7>, "length": <float 2.5-7>, "n_doors": <int 1-4>}
   ],
   "interior_door": {
     "width":  <float 0.90-1.50>,             // ≥0.90 m mevzuat
@@ -55,6 +55,9 @@ KURALLAR:
 - "rooms" listesi tam olarak (oda + salon) sayısında olmalı.
 - İlk N tanesi role="salon" (N = kullanıcının verdiği salon sayısı), gerisi
   role="oda". Salonlar tipik olarak odalardan daha büyük (≥4 m en az).
+- Her oda için "n_doors" kullanıcının verdiği [min, max] aralığında olmalı
+  (constraint block'a bak). 1'inci kapı her zaman koridora bakar; ek kapılar
+  dış cephe duvarlarına konur.
 - Mevzuat eşikleri kesin: kapı ≥0.90 m, kapı yükseklik ≥2.00 m,
   koridor ≥1.20 m. Bunların altına inme.
 - Sadece JSON döndür, açıklama veya kod bloğu yok.
@@ -182,6 +185,8 @@ def _build_constraints_block(constraints: dict | None) -> str:
     n_salon = constraints.get("n_salons")
     n_kor = constraints.get("n_corridors")
     n_kat = constraints.get("n_storeys")
+    n_doors_min = constraints.get("n_doors_min")
+    n_doors_max = constraints.get("n_doors_max")
     if n_kat is not None:
         parts.append(f"- Kat sayısı: {int(n_kat)}")
     if n_oda is not None:
@@ -191,6 +196,9 @@ def _build_constraints_block(constraints: dict | None) -> str:
     if n_kor is not None:
         parts.append(f"- Koridor sayısı (kat başına): {int(n_kor)} "
                      f"({'straight' if int(n_kor) <= 1 else 'lshape'} layout demektir)")
+    if n_doors_min is not None and n_doors_max is not None:
+        parts.append(f"- Oda başına kapı sayısı: {int(n_doors_min)}-{int(n_doors_max)} arası "
+                     f"(her oda için n_doors alanına kendi tercihin)")
     if not parts:
         return ""
     return (
@@ -307,6 +315,7 @@ def _call_llm(system_prompt: str, user_prompt: str, model: str) -> DesignPlan:
                 "role": str(r.get("role", "oda")),
                 "width": float(r.get("width", r.get("w", 4.0))),
                 "length": float(r.get("length", r.get("l", 4.0))),
+                "n_doors": int(r.get("n_doors", 1) or 1),
             })
 
     return DesignPlan(

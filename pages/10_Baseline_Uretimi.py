@@ -125,6 +125,15 @@ with ncc[3]:
              "Her kat aynı şemayı (oda/salon/koridor) tekrar eder.",
     )
 
+# Oda başına kapı sayısı — range slider
+n_doors_range = st.slider(
+    "🚪 Oda başına kapı sayısı (her odanın kaç kapısı olacak)",
+    min_value=1, max_value=4, value=(1, 2), step=1,
+    help="1. kapı koridora bakar (zorunlu). Ek kapılar dış cephe duvarlarına "
+         "konur. LLM her oda için bu aralıkta kendi sayısını seçer; min=max "
+         "yaparsan tüm odalar aynı sayıda olur.",
+)
+
 # Doğrulama
 n_total_rooms = int(n_oda_in) + int(n_salon_in)
 if n_total_rooms < 2 or n_total_rooms > 4:
@@ -236,6 +245,8 @@ if st.button("🏠 LLM ile baseline'ları üret", type="primary",
                 "n_salons": int(n_salon_in),
                 "n_corridors": int(n_kor_in),
                 "n_storeys": int(n_kat_in),
+                "n_doors_min": int(n_doors_range[0]),
+                "n_doors_max": int(n_doors_range[1]),
             },
             progress_cb=_cb,
         )
@@ -260,6 +271,7 @@ if st.button("🏠 LLM ile baseline'ları üret", type="primary",
             "🛋️ Salon sayısı": int(n_salon_in),
             "🚶 Koridor sayısı": int(n_kor_in),
             "🏢 Kat sayısı": int(n_kat_in),
+            "🚪 Oda başına kapı aralığı": list(n_doors_range),
             "Toplam oda+salon": n_total_rooms,
             "Layout (zorlanan)": (
                 "lshape" if int(n_kor_in) == 2 else "straight"),
@@ -275,8 +287,9 @@ if st.button("🏠 LLM ile baseline'ları üret", type="primary",
         for label, plan in all_plans:
             room_sizes = "; ".join(
                 f"{r.get('role','?')}={r.get('width',0):.2f}×{r.get('length',0):.2f}"
+                f"[{r.get('n_doors', 1)}k]"
                 for r in (plan.rooms or [])
-            )[:120]
+            )[:140]
             ifc_rows.append({
                 "IFC": label,
                 "Kat yük. (m)": round(plan.storey_height, 2),
