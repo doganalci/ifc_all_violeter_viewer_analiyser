@@ -30,6 +30,56 @@ from ml.app.state import (
 )
 from ml.viz.graph_view import interactive_agraph
 from ml.viz.ifc3d import build_figure, extract_meshes
+from violation_pool import storage
+
+
+def _ifc_prompt_panel(entry: dict | None, key: str) -> None:
+    """Verilen IFC için LLM prompt + tasarım planı expander'ları çiz."""
+    if entry is None:
+        return
+    rec = storage.get_ifc_model(entry["id"]) or {}
+    user_prompt = rec.get("prompt") or ""
+    llm_model = rec.get("llm_model") or ""
+    params = rec.get("params") or {}
+    if isinstance(params, str):
+        import json as _json
+        try:
+            params = _json.loads(params)
+        except Exception:
+            params = {}
+    design = params.get("design_plan") or {}
+    kind_label = params.get("kind_label") or ""
+
+    if not (user_prompt or design):
+        # LLM'siz üretilmiş (eski prosedürel) — yine de bilgi göster
+        with st.expander(f"ℹ️ Üretim bilgisi · {key}", expanded=False):
+            st.write(f"**Model:** `{llm_model or 'synth (LLM yok)'}`")
+            st.write(f"**Tür:** `{kind_label or '—'}`")
+            if params:
+                st.json(params, expanded=False)
+        return
+
+    with st.expander(f"🤖 LLM prompt · {key}", expanded=False):
+        meta_cols = st.columns([1, 1, 2])
+        meta_cols[0].metric("Model", llm_model or "?")
+        meta_cols[1].metric("Tür", kind_label or "baseline")
+        if design:
+            meta_cols[2].caption(
+                f"🏛️ Tasarım: **{design.get('n_storeys', '?')} kat** · "
+                f"**{design.get('n_rooms_per_floor', '?')} oda/kat** · "
+                f"layout=`{design.get('layout', '?')}`"
+            )
+        if user_prompt:
+            st.markdown("**User prompt** (LLM'e gönderilen):")
+            st.code(user_prompt, language="text")
+        if design.get("system_prompt"):
+            st.markdown("**System prompt** (LLM rolü):")
+            st.code(design["system_prompt"], language="text")
+        if design.get("rationale"):
+            st.markdown(f"**LLM rationale:** _{design['rationale']}_")
+        if design.get("raw_llm_response"):
+            st.markdown("**LLM ham yanıtı:**")
+            st.code(design["raw_llm_response"], language="json")
 
 
 # ---- Cached IFC tessellation ------------------------------------------------
@@ -103,16 +153,37 @@ sel_pkg = st.selectbox(
     key="mv6_pkg",
 )
 
-pkg_baselines = sorted(
+pkg_baselines_all = sorted(
     [b for b in all_baselines if _pkg_of(b) == sel_pkg],
     key=lambda b: b.get("name") or "",
 )
-if not pkg_baselines:
+if not pkg_baselines_all:
     st.warning("Bu pakette baseline yok.")
     st.stop()
 
-# Ana baseline = paketin İLK baseline'ı (sabit referans)
-ana_entry = pkg_baselines[0]
+# Ana baseline = parent_id NULL olan baseline (LLM hiyerarşik üretimde).
+# Fallback: parent_id'ye bakmadan paketin ilki (eski prosedürel üretim için).
+_ana_candidates = [b for b in pkg_baselines_all if not b.get("parent_id")]
+if _ana_candidates:
+    ana_entry = _ana_candidates[0]
+    # Varyantlar = ana'nın doğrudan çocukları
+    pkg_baselines = [b for b in pkg_baselines_all
+                     if b.get("parent_id") == ana_entry["id"]]
+    if not pkg_baselines:
+        # Hiyerarşi var ama varyant yok → col 2 = ana'nın kendisi
+        pkg_baselines = [ana_entry]
+    _hierarchy_mode = "llm"
+else:
+    # Eski prosedürel paket: hiyerarşi yok, hepsi peer.
+    ana_entry = pkg_baselines_all[0]
+    pkg_baselines = pkg_baselines_all
+    _hierarchy_mode = "flat"
+
+st.caption(
+    f"🏛️ Ana baseline: `{ana_entry['name']}` · "
+    f"{len(pkg_baselines)} varyant · "
+    f"hiyerarşi: **{'LLM (parent_id ile)' if _hierarchy_mode == 'llm' else 'düz (eski prosedürel)'}**"
+)
 
 # --- Baseline seçici (col 2) ---------------------------------------------
 st.markdown("#### Baseline (paket içi seçim)")
@@ -299,6 +370,16 @@ _render_graph(g1, "Ana baseline", ana_sample, key="ana_g")
 _render_graph(g2, "Baseline", baseline_sample, key="bsl_g")
 _render_graph(g3, "İhlalli", violated_sample,
               vio=vio_show, decoy=dec_show, normal=nor_show, key="vio_g")
+
+# --- LLM prompt expander'ları (her sütun için) --------------------------
+st.markdown("### 🤖 Üretim prompt'ları")
+p1, p2, p3 = st.columns(3)
+with p1:
+    _ifc_prompt_panel(ana_entry, key="ana baseline")
+with p2:
+    _ifc_prompt_panel(baseline_entry, key="baseline")
+with p3:
+    _ifc_prompt_panel(violated_entry, key="ihlalli")
 
 # --- Inspector -----------------------------------------------------------
 if current:
