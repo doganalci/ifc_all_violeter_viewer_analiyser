@@ -86,22 +86,23 @@ if ana_ad_clean in existing_names:
 st.subheader("2. Bina tarifi (template prompt)")
 default_prompt = (
     "Küçük ölçekli bir ofis binası.\n"
-    "- 2-3 oda + merkezi koridor\n"
-    "- 1-2 kat\n"
     "- Her odanın koridora bir kapısı olsun\n"
     "- Erişilebilirlik açısından kapı ve koridor boyutları mevzuata uygun"
 )
 user_template = st.text_area(
     "💬 Bina tarifi",
-    value=default_prompt, height=180,
-    help="Bina tipi, kat sayısı, layout istekleri vs. LLM bunu okuyup "
-         "TASARIM PARAMETRELERİ (JSON) üretir. Aşağıdaki sayılar prompt'a "
-         "ZORUNLU kısıt olarak eklenir."
+    value=default_prompt, height=140,
+    help="Bina tipi, işlev, stil özellikleri vs. **Sayılar (oda, salon, "
+         "koridor, kat) aşağıdaki parametrelerden gelir** — buraya yazma. "
+         "LLM bu metni + parametreleri okuyup TASARIM PARAMETRELERİ (JSON) "
+         "üretir."
 )
 
 # --- Zorunlu sayısal kısıtlar (prompt'a dinamik enjekte) ----------------
-st.markdown("**🔢 Zorunlu sayılar** (prompt'a otomatik eklenir, kod tarafında zorlanır)")
-ncc = st.columns(3)
+st.markdown(
+    "**🔢 Zorunlu sayılar** (LLM prompt'una otomatik eklenir + kod tarafında zorlanır)"
+)
+ncc = st.columns(4)
 with ncc[0]:
     n_oda_in = st.number_input(
         "🚪 Oda sayısı (kat başına)", min_value=1, max_value=4, value=2,
@@ -117,6 +118,12 @@ with ncc[2]:
         "🚶 Koridor sayısı (kat başına)", min_value=1, max_value=2, value=1,
         help="1 = straight (merkez koridor). 2 = lshape (iki perpendiküler).",
     )
+with ncc[3]:
+    n_kat_in = st.number_input(
+        "🏢 Kat sayısı", min_value=1, max_value=3, value=1,
+        help="Default 1 (tek kat). 2-3 katlı bina için artır. "
+             "Her kat aynı şemayı (oda/salon/koridor) tekrar eder.",
+    )
 
 # Doğrulama
 n_total_rooms = int(n_oda_in) + int(n_salon_in)
@@ -127,9 +134,9 @@ if n_total_rooms < 2 or n_total_rooms > 4:
     constraints_valid = False
 else:
     st.caption(
-        f"✓ Toplam {n_total_rooms} oda+salon · "
-        f"layout `{'lshape' if int(n_kor_in) == 2 else 'straight'}` zorlanacak · "
-        f"**tüm IFC'ler 1 katlı** (zorla)"
+        f"✓ {int(n_kat_in)} kat × ({int(n_oda_in)} oda + {int(n_salon_in)} salon "
+        f"+ {int(n_kor_in)} koridor) · "
+        f"layout `{'lshape' if int(n_kor_in) == 2 else 'straight'}` zorlanacak"
     )
     constraints_valid = True
 
@@ -228,6 +235,7 @@ if st.button("🏠 LLM ile baseline'ları üret", type="primary",
                 "n_rooms": int(n_oda_in),
                 "n_salons": int(n_salon_in),
                 "n_corridors": int(n_kor_in),
+                "n_storeys": int(n_kat_in),
             },
             progress_cb=_cb,
         )
@@ -251,10 +259,10 @@ if st.button("🏠 LLM ile baseline'ları üret", type="primary",
             "🚪 Oda sayısı": int(n_oda_in),
             "🛋️ Salon sayısı": int(n_salon_in),
             "🚶 Koridor sayısı": int(n_kor_in),
+            "🏢 Kat sayısı": int(n_kat_in),
             "Toplam oda+salon": n_total_rooms,
             "Layout (zorlanan)": (
                 "lshape" if int(n_kor_in) == 2 else "straight"),
-            "Kat sayısı (zorlanan)": 1,
         }, expanded=True)
 
         st.markdown("**Her IFC için LLM'in seçtiği boyutlar:**")

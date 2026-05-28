@@ -181,6 +181,9 @@ def _build_constraints_block(constraints: dict | None) -> str:
     n_oda = constraints.get("n_rooms")
     n_salon = constraints.get("n_salons")
     n_kor = constraints.get("n_corridors")
+    n_kat = constraints.get("n_storeys")
+    if n_kat is not None:
+        parts.append(f"- Kat sayısı: {int(n_kat)}")
     if n_oda is not None:
         parts.append(f"- Oda sayısı (kat başına): {int(n_oda)}")
     if n_salon is not None:
@@ -193,7 +196,8 @@ def _build_constraints_block(constraints: dict | None) -> str:
     return (
         "\n\n⚠️ ZORUNLU KISITLAR (kullanıcı talebi, kesinlikle uy):\n"
         + "\n".join(parts)
-        + "\n  → n_rooms_per_floor = oda + salon toplamı\n"
+        + "\n  → n_storeys = kullanıcının verdiği kat sayısı\n"
+        + "  → n_rooms_per_floor = oda + salon toplamı\n"
         + "  → layout 'lshape' iff koridor sayısı 2; aksi 'straight'\n"
     )
 

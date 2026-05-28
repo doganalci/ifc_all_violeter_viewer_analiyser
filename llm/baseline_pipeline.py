@@ -34,18 +34,20 @@ from ml.data.synth_baseline_v2 import SynthParamsV2, generate_v2
 def _apply_constraints(plan: DesignPlan, constraints: dict | None) -> DesignPlan:
     """LLM çıktısını UI kısıtlarına göre clamp et (zorunlu sayıları zorla).
 
-    constraints: {n_rooms, n_salons, n_corridors} — verilen alanlar zorlanır,
-    None olanlar LLM'in seçtiği değerde kalır.
+    constraints: {n_rooms, n_salons, n_corridors, n_storeys} — verilen
+    alanlar zorlanır, None olanlar LLM'in seçtiği değerde kalır.
 
-    Tüm IFC'ler tek katlı zorlanır (n_storeys=1) — kullanıcı isteği.
+    n_storeys default 1 (kullanıcı vermediyse).
     """
-    # Tek kat zorla (LLM ne dese olsun)
-    plan.n_storeys = 1
     if not constraints:
+        plan.n_storeys = 1
         return plan
     n_rooms = constraints.get("n_rooms")
     n_salons = constraints.get("n_salons")
     n_corridors = constraints.get("n_corridors")
+    n_storeys = constraints.get("n_storeys")
+    # Kat sayısı: kullanıcı verdiyse onu, vermediyse 1
+    plan.n_storeys = max(1, min(3, int(n_storeys))) if n_storeys is not None else 1
     if n_rooms is not None or n_salons is not None:
         total = (int(n_rooms) if n_rooms is not None else 0) + \
                 (int(n_salons) if n_salons is not None else 0)
