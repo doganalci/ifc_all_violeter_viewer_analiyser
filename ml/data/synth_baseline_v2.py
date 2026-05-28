@@ -73,7 +73,7 @@ class SynthParamsV2:
 
 @dataclass
 class SpecOverride:
-    """LLM'in döneceği yapısal plan (subset).
+    """LLM'in döneceği yapısal plan (zenginleştirilmiş — boyutlar dahil).
 
     Tüm alanlar opsiyonel; verilmeyenler SynthParamsV2 aralıklarından örnek alır.
     """
@@ -83,6 +83,18 @@ class SpecOverride:
     storey_height: float | None = None
     # İleri seviye: kat bazında rooms / sizes (LLM detaylı plan verirse)
     storeys: list[dict] | None = None
+
+    # YENİ — LLM'in açıkça belirlediği boyutlar (her IFC için)
+    wall_thickness: float | None = None
+    corridor_width: float | None = None
+    corridor_length: float | None = None
+    # Her oda için ayrı boyut: [{"role": "salon"|"oda", "width": ..., "length": ...}, ...]
+    # Sıra: ilk N salon (role='salon'), gerisi 'oda'.
+    rooms: list[dict] | None = None
+    interior_door_w: float | None = None
+    interior_door_h: float | None = None
+    entrance_door_w: float | None = None
+    entrance_door_h: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -124,11 +136,22 @@ def _room_name(idx: int, n_total: int, n_salons: int) -> str:
 
 
 def _draw_straight(rng: random.Random, p: SynthParamsV2, n_rooms: int,
-                   is_ground: bool) -> tuple[list, list]:
-    """Merkez koridor + 2-4 oda (N/S/E/W kanatlar)."""
+                   is_ground: bool,
+                   override: "SpecOverride | None" = None) -> tuple[list, list]:
+    """Merkez koridor + 2-4 oda (N/S/E/W kanatlar).
+
+    override verilirse o boyutlar kullanılır; yoksa p aralıklarından rastgele.
+    """
     n_rooms = max(2, min(4, n_rooms))
-    cw = _u(rng, p.corridor_w_min, p.corridor_w_max)
-    cl = _u(rng, p.corridor_l_min, p.corridor_l_max)
+    # Koridor boyutu: override → rastgele
+    if override and override.corridor_width:
+        cw = float(override.corridor_width)
+    else:
+        cw = _u(rng, p.corridor_w_min, p.corridor_w_max)
+    if override and override.corridor_length:
+        cl = float(override.corridor_length)
+    else:
+        cl = _u(rng, p.corridor_l_min, p.corridor_l_max)
 
     # Koridor: (0,0) → (cl, cw). x ekseni boyunca uzun.
     rooms_out = [{"name": "Koridor", "origin": [0.0, 0.0], "size": [cl, cw]}]
@@ -140,9 +163,16 @@ def _draw_straight(rng: random.Random, p: SynthParamsV2, n_rooms: int,
     # Hangi koridor kenarının dışarı çıkış için kullanılabileceğini izle
     occupied_sides: set[str] = set()
 
+    # Override'dan oda boyutları (her oda için ayrı)
+    override_rooms = override.rooms if (override and override.rooms) else None
+
     for idx, side in enumerate(sides):
-        rw = _u(rng, p.room_w_min, p.room_w_max)
-        rl = _u(rng, p.room_l_min, p.room_l_max)
+        if override_rooms and idx < len(override_rooms):
+            rw = float(override_rooms[idx].get("width", 0)) or _u(rng, p.room_w_min, p.room_w_max)
+            rl = float(override_rooms[idx].get("length", 0)) or _u(rng, p.room_l_min, p.room_l_max)
+        else:
+            rw = _u(rng, p.room_w_min, p.room_w_max)
+            rl = _u(rng, p.room_l_min, p.room_l_max)
 
         # Yerleşim hesabı: oda koridorun ilgili kenarında dış yöne konur,
         # boyutu koridor kenarı boyunca paylaşılan duvarı kapsayacak biçimde
@@ -177,8 +207,15 @@ def _draw_straight(rng: random.Random, p: SynthParamsV2, n_rooms: int,
         rooms_out.append({"name": rname, "origin": origin, "size": size})
         occupied_sides.add(side)
 
-        dw = _u(rng, p.door_w_min, p.door_w_max)
-        dh = _u(rng, p.door_h_min, p.door_h_max)
+        # İç kapı boyutu: override → rastgele
+        if override and override.interior_door_w:
+            dw = float(override.interior_door_w)
+        else:
+            dw = _u(rng, p.door_w_min, p.door_w_max)
+        if override and override.interior_door_h:
+            dh = float(override.interior_door_h)
+        else:
+            dh = _u(rng, p.door_h_min, p.door_h_max)
         offset = _clamp((wall_len - dw) / 2.0, 0.10, wall_len - dw - 0.10)
         openings.append({
             "room": rname, "side": door_side, "type": "door",
@@ -205,17 +242,25 @@ def _draw_straight(rng: random.Random, p: SynthParamsV2, n_rooms: int,
 
     # Zemin katta dış giriş kapısı — koridorun boş kenarına
     if is_ground:
+        # Giriş kapı boyutu: override → rastgele
+        if override and override.entrance_door_w:
+            dwe = float(override.entrance_door_w)
+        else:
+            dwe = _u(rng, p.door_w_min, p.door_w_max)
+        if override and override.entrance_door_h:
+            dhe = float(override.entrance_door_h)
+        else:
+            dhe = _u(rng, p.door_h_min, p.door_h_max)
         for trial_side in ("south", "north", "east", "west"):
             if trial_side in occupied_sides:
                 continue
             wall_len = cl if trial_side in ("south", "north") else cw
-            dwe = _u(rng, p.door_w_min, p.door_w_max)
             if wall_len - dwe < 0.4:
                 continue
             offset = _clamp((wall_len - dwe) / 2.0, 0.10, wall_len - dwe - 0.10)
             openings.append({
                 "room": "Koridor", "side": trial_side, "type": "door",
-                "width": dwe, "height": _u(rng, p.door_h_min, p.door_h_max),
+                "width": dwe, "height": dhe,
                 "offset": offset,
                 "is_exterior": True, "name": "Giris Kapisi",
             })
@@ -225,7 +270,8 @@ def _draw_straight(rng: random.Random, p: SynthParamsV2, n_rooms: int,
 
 
 def _draw_lshape(rng: random.Random, p: SynthParamsV2, n_rooms: int,
-                 is_ground: bool) -> tuple[list, list]:
+                 is_ground: bool,
+                 override: "SpecOverride | None" = None) -> tuple[list, list]:
     """L-plan koridor: yatay + dikey segment, 2-3 oda kanat.
 
     Layout (kuş bakışı):
@@ -238,11 +284,21 @@ def _draw_lshape(rng: random.Random, p: SynthParamsV2, n_rooms: int,
         +----+----+----+
         | Oda_S   |
         +---------+
+
+    override.corridor_width / corridor_length verilirse her iki segment de
+    aynı boyutu kullanır.
     """
     n_rooms = max(2, min(3, n_rooms))     # L-plan'da entrance için pay
-    cw = _u(rng, p.corridor_w_min, p.corridor_w_max)
-    cl_h = _u(rng, p.corridor_l_min, p.corridor_l_max)   # yatay uzunluk
-    cl_v = _u(rng, p.corridor_l_min, p.corridor_l_max)   # dikey uzunluk
+    if override and override.corridor_width:
+        cw = float(override.corridor_width)
+    else:
+        cw = _u(rng, p.corridor_w_min, p.corridor_w_max)
+    if override and override.corridor_length:
+        cl_h = float(override.corridor_length)
+        cl_v = float(override.corridor_length)
+    else:
+        cl_h = _u(rng, p.corridor_l_min, p.corridor_l_max)
+        cl_v = _u(rng, p.corridor_l_min, p.corridor_l_max)
 
     # Kor_H: x in [0, cl_h], y in [0, cw]
     # Kor_V: x in [cl_h - cw, cl_h], y in [cw, cw + cl_v]
@@ -267,11 +323,23 @@ def _draw_lshape(rng: random.Random, p: SynthParamsV2, n_rooms: int,
     cor_v_cx = cl_h - cw / 2.0
     cor_v_cy = cw + cl_v / 2.0
 
-    for rname, slot in slots:
-        rw = _u(rng, p.room_w_min, p.room_w_max)
-        rl = _u(rng, p.room_l_min, p.room_l_max)
-        dw = _u(rng, p.door_w_min, p.door_w_max)
-        dh = _u(rng, p.door_h_min, p.door_h_max)
+    override_rooms = override.rooms if (override and override.rooms) else None
+
+    for slot_idx, (rname, slot) in enumerate(slots):
+        if override_rooms and slot_idx < len(override_rooms):
+            rw = float(override_rooms[slot_idx].get("width", 0)) or _u(rng, p.room_w_min, p.room_w_max)
+            rl = float(override_rooms[slot_idx].get("length", 0)) or _u(rng, p.room_l_min, p.room_l_max)
+        else:
+            rw = _u(rng, p.room_w_min, p.room_w_max)
+            rl = _u(rng, p.room_l_min, p.room_l_max)
+        if override and override.interior_door_w:
+            dw = float(override.interior_door_w)
+        else:
+            dw = _u(rng, p.door_w_min, p.door_w_max)
+        if override and override.interior_door_h:
+            dh = float(override.interior_door_h)
+        else:
+            dh = _u(rng, p.door_h_min, p.door_h_max)
 
         if slot == "west_H":
             rl = max(rl, cw + 0.5)
@@ -312,11 +380,18 @@ def _draw_lshape(rng: random.Random, p: SynthParamsV2, n_rooms: int,
 
     # Zemin katta dış giriş — Kor_H'nin güneyine
     if is_ground:
-        dwe = _u(rng, p.door_w_min, p.door_w_max)
+        if override and override.entrance_door_w:
+            dwe = float(override.entrance_door_w)
+        else:
+            dwe = _u(rng, p.door_w_min, p.door_w_max)
+        if override and override.entrance_door_h:
+            dhe = float(override.entrance_door_h)
+        else:
+            dhe = _u(rng, p.door_h_min, p.door_h_max)
         offset = _clamp((cl_h - dwe) / 2.0, 0.10, cl_h - dwe - 0.10)
         openings.append({
             "room": "Koridor_H", "side": "south", "type": "door",
-            "width": dwe, "height": _u(rng, p.door_h_min, p.door_h_max),
+            "width": dwe, "height": dhe,
             "offset": offset,
             "is_exterior": True, "name": "Giris Kapisi",
         })
@@ -352,6 +427,9 @@ def make_spec_v2(seed: int, params: SynthParamsV2 | None = None,
     storey_h = (override.storey_height if override and override.storey_height
                 else p.storey_height)
 
+    # Duvar kalınlığı: override → params
+    wall_t = float(override.wall_thickness) if (override and override.wall_thickness) else p.wall_thickness
+
     storeys_data: list[dict] = []
     for s_idx in range(n_storeys):
         # Her kat bağımsız üretilir → çeşitlilik. Aynı seed'ten türeyen
@@ -360,9 +438,11 @@ def make_spec_v2(seed: int, params: SynthParamsV2 | None = None,
         floor_rng = random.Random(floor_seed)
         is_ground = (s_idx == 0)
         if layout == "lshape":
-            rooms, openings = _draw_lshape(floor_rng, p, n_rooms, is_ground)
+            rooms, openings = _draw_lshape(floor_rng, p, n_rooms, is_ground,
+                                            override=override)
         else:
-            rooms, openings = _draw_straight(floor_rng, p, n_rooms, is_ground)
+            rooms, openings = _draw_straight(floor_rng, p, n_rooms, is_ground,
+                                              override=override)
         storey_name = f"Kat {s_idx}" if s_idx > 0 else "Zemin"
         storeys_data.append({
             "name": storey_name,
@@ -386,7 +466,7 @@ def make_spec_v2(seed: int, params: SynthParamsV2 | None = None,
     return {
         "name": name or f"synth-v2-{seed:05d}",
         "storey_height": storey_h,
-        "wall_thickness": p.wall_thickness,
+        "wall_thickness": wall_t,
         "storeys": storeys_data,
         "_meta": {
             "kind": "synth_v2",
@@ -397,17 +477,17 @@ def make_spec_v2(seed: int, params: SynthParamsV2 | None = None,
             "n_salons": p.n_salons,
             "door_widths_cm": door_widths_cm,
             "room_sizes_m": room_sizes_m,
-            "wall_thickness_m": p.wall_thickness,
+            "wall_thickness_m": wall_t,
             "storey_height_m": storey_h,
             "compliant": True,
-            # Sliders'tan gelen UI aralıkları (audit için)
-            "param_ranges": {
-                "room_w": [p.room_w_min, p.room_w_max],
-                "room_l": [p.room_l_min, p.room_l_max],
-                "corridor_w": [p.corridor_w_min, p.corridor_w_max],
-                "corridor_l": [p.corridor_l_min, p.corridor_l_max],
-                "door_w": [p.door_w_min, p.door_w_max],
-                "door_h": [p.door_h_min, p.door_h_max],
+            # Hangi alanlar override geldi (LLM seçimi) audit için
+            "override_applied": {
+                "wall_thickness": (override and override.wall_thickness) is not None,
+                "corridor_width": (override and override.corridor_width) is not None,
+                "corridor_length": (override and override.corridor_length) is not None,
+                "rooms": (override and override.rooms) is not None,
+                "interior_door": (override and override.interior_door_w) is not None,
+                "entrance_door": (override and override.entrance_door_w) is not None,
             },
         },
     }

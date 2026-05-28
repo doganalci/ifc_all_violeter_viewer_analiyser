@@ -20,27 +20,44 @@ from dataclasses import dataclass, field
 from ml.data.synth_baseline_v2 import SpecOverride
 
 
-# Sistem prompt — LLM'in rolü ve çıktı JSON şeması. Eski OPTIMIZED_PROMPT'tan
-# ilham; sade tutuldu çünkü çıktı uzun değil (5 alan).
 SYSTEM_PROMPT = """Sen bir mimar / BIM tasarımcısısın. Kullanıcının istediği
-binanın TASARIM PARAMETRELERİNİ JSON olarak üretirsin. Bu parametreler
-prosedürel bir IFC çizici motor tarafından gerçek IFC4 dosyasına dönüştürülür.
+binanın TÜM tasarım parametrelerini DETAYLI JSON olarak üretirsin. Bu plan
+prosedürel motora verilecek ve geçerli IFC4 dosyasına çevrilecek.
 
-ZORUNLU JSON şeması (SADECE bu alanlar, ek alan ekleme):
+NOT: Kullanıcı oda/salon/koridor sayısını ve layout'u zaten zorla belirledi
+(prompt'taki "ZORUNLU KISITLAR" bloğuna bak). Sen sadece BOYUTLARI ve
+RATIONALE'i belirle.
+
+ZORUNLU JSON şeması (her alan zorunlu, ek alan ekleme):
 {
-  "n_storeys": <int 1-3>,
-  "n_rooms_per_floor": <int 2-4>,
-  "layout": "straight" | "lshape",
-  "storey_height": <float 2.7-3.5>,
-  "rationale": "<kısa Türkçe, neden bu seçim>"
+  "storey_height":   <float 2.7-3.5>,        // metre, kat yüksekliği
+  "wall_thickness":  <float 0.15-0.30>,      // metre, duvar kalınlığı
+  "corridor": {
+    "width":  <float 1.20-3.00>,             // ≥1.20 m mevzuat
+    "length": <float 3.0-8.0>
+  },
+  "rooms": [                                  // tam (oda+salon) sayısı kadar
+    {"role": "salon", "width": <float 2.5-7>, "length": <float 2.5-7>},
+    {"role": "oda",   "width": <float 2.5-7>, "length": <float 2.5-7>}
+  ],
+  "interior_door": {
+    "width":  <float 0.90-1.50>,             // ≥0.90 m mevzuat
+    "height": <float 2.00-2.40>              // ≥2.00 m mevzuat
+  },
+  "entrance_door": {
+    "width":  <float 0.90-1.50>,
+    "height": <float 2.00-2.40>
+  },
+  "rationale": "<kısa Türkçe açıklama>"
 }
 
 KURALLAR:
+- "rooms" listesi tam olarak (oda + salon) sayısında olmalı.
+- İlk N tanesi role="salon" (N = kullanıcının verdiği salon sayısı), gerisi
+  role="oda". Salonlar tipik olarak odalardan daha büyük (≥4 m en az).
+- Mevzuat eşikleri kesin: kapı ≥0.90 m, kapı yükseklik ≥2.00 m,
+  koridor ≥1.20 m. Bunların altına inme.
 - Sadece JSON döndür, açıklama veya kod bloğu yok.
-- "straight": merkez koridor, oda kanatlar (N/S/E/W).
-- "lshape": L şeklinde koridor (en fazla 3 oda; daha fazlasını straight yap).
-- Bina küçük ölçekte (toplam oda ≤ 12). Büyük binalar şu an desteklenmiyor.
-- Tüm değerler aralık dışında kalırsa motor klamplar; sen yine de aralıkta tut.
 """
 
 
@@ -64,20 +81,33 @@ Varyasyon rehberi:
 
 @dataclass
 class DesignPlan:
-    """LLM tasarım planı + kullanılan prompt'lar (şeffaflık için saklı)."""
+    """LLM tasarım planı + kullanılan prompt'lar (şeffaflık için saklı).
+
+    LLM artık tüm boyutları belirler (rooms, corridor, doors, wall thickness).
+    """
     n_storeys: int
     n_rooms_per_floor: int
     layout: str
     storey_height: float
     rationale: str
 
-    # Şeffaflık — bu IFC hangi prompt'la üretildi (DB'ye + UI'da expander).
+    # LLM detayları — boyutlar
+    wall_thickness: float = 0.20
+    corridor_width: float = 1.50
+    corridor_length: float = 4.0
+    rooms: list[dict] = None         # [{"role":"salon","width":...,"length":...}, ...]
+    interior_door_w: float = 0.95
+    interior_door_h: float = 2.10
+    entrance_door_w: float = 1.10
+    entrance_door_h: float = 2.20
+
+    # Şeffaflık
     system_prompt: str = ""
     user_prompt: str = ""
     model: str = ""
     raw_llm_response: str = ""
 
-    # Ölçüm — token sayımı, süre, USD maliyet
+    # Ölçüm
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
@@ -86,17 +116,33 @@ class DesignPlan:
     cost_is_estimate: bool = False
     cost_matched: str = ""
 
+    def __post_init__(self):
+        if self.rooms is None:
+            self.rooms = []
+
     def to_override(self) -> SpecOverride:
         return SpecOverride(
             n_storeys=int(self.n_storeys),
             n_rooms_per_floor=int(self.n_rooms_per_floor),
             layout=str(self.layout),
             storey_height=float(self.storey_height),
+            wall_thickness=float(self.wall_thickness),
+            corridor_width=float(self.corridor_width),
+            corridor_length=float(self.corridor_length),
+            rooms=list(self.rooms) if self.rooms else None,
+            interior_door_w=float(self.interior_door_w),
+            interior_door_h=float(self.interior_door_h),
+            entrance_door_w=float(self.entrance_door_w),
+            entrance_door_h=float(self.entrance_door_h),
         )
 
     def design_summary(self) -> str:
-        return (f"{self.n_storeys} kat · {self.n_rooms_per_floor} oda/kat · "
-                f"{self.layout} · h={self.storey_height}m")
+        return (
+            f"{self.n_storeys} kat · {self.n_rooms_per_floor} oda/kat · "
+            f"{self.layout} · h={self.storey_height}m · "
+            f"koridor {self.corridor_width:.2f}×{self.corridor_length:.2f}m · "
+            f"kapı {self.interior_door_w:.2f}×{self.interior_door_h:.2f}m"
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -104,6 +150,14 @@ class DesignPlan:
             "n_rooms_per_floor": self.n_rooms_per_floor,
             "layout": self.layout,
             "storey_height": self.storey_height,
+            "wall_thickness": self.wall_thickness,
+            "corridor_width": self.corridor_width,
+            "corridor_length": self.corridor_length,
+            "rooms": self.rooms,
+            "interior_door_w": self.interior_door_w,
+            "interior_door_h": self.interior_door_h,
+            "entrance_door_w": self.entrance_door_w,
+            "entrance_door_h": self.entrance_door_h,
             "rationale": self.rationale,
             "model": self.model,
             "system_prompt": self.system_prompt,
@@ -236,12 +290,38 @@ def _call_llm(system_prompt: str, user_prompt: str, model: str) -> DesignPlan:
         raise RuntimeError(
             f"LLM JSON döndürmedi: {e}. İçerik: {content[:200]}")
 
+    # Yeni şema: corridor, rooms, interior_door, entrance_door
+    cor = data.get("corridor") or {}
+    int_door = data.get("interior_door") or {}
+    ent_door = data.get("entrance_door") or {}
+    rooms_raw = data.get("rooms") or []
+    # Normalize: her oda için {role, width, length} olsun
+    norm_rooms = []
+    for r in rooms_raw:
+        if isinstance(r, dict):
+            norm_rooms.append({
+                "role": str(r.get("role", "oda")),
+                "width": float(r.get("width", r.get("w", 4.0))),
+                "length": float(r.get("length", r.get("l", 4.0))),
+            })
+
     return DesignPlan(
+        # Üst seviye (constraints clamp eder)
         n_storeys=int(data.get("n_storeys", 1)),
-        n_rooms_per_floor=int(data.get("n_rooms_per_floor", 2)),
+        n_rooms_per_floor=int(data.get("n_rooms_per_floor", len(norm_rooms) or 2)),
         layout=str(data.get("layout", "straight")),
         storey_height=float(data.get("storey_height", 3.0)),
+        # Boyutlar
+        wall_thickness=float(data.get("wall_thickness", 0.20)),
+        corridor_width=float(cor.get("width", 1.50)),
+        corridor_length=float(cor.get("length", 4.0)),
+        rooms=norm_rooms,
+        interior_door_w=float(int_door.get("width", 0.95)),
+        interior_door_h=float(int_door.get("height", 2.10)),
+        entrance_door_w=float(ent_door.get("width", 1.10)),
+        entrance_door_h=float(ent_door.get("height", 2.20)),
         rationale=str(data.get("rationale", "")),
+        # Ölçüm
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         model=model,

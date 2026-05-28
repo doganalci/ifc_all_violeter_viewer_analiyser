@@ -182,55 +182,12 @@ mc[0].metric("Ana baseline", 1)
 mc[1].metric("Varyant", int(variants))
 mc[2].metric("Toplam LLM çağrısı", int(variants) + 1)
 
-# Geometri parametreleri (sliders) — LLM kat/oda/layout seçiyor; oda/koridor
-# fiziksel boyutu prosedürel motor bu aralıktan örnek alır.
-with st.expander("📐 Geometri parametreleri (oda + koridor + kapı boyut aralığı)",
-                 expanded=False):
-    st.caption(
-        "Prosedürel motor (synth_baseline_v2) bu aralıklardan rastgele örnek "
-        "alarak her IFC'nin oda/koridor/kapı boyutlarını belirler. LLM bunlara "
-        "karışmaz — sadece n_storeys, n_rooms, layout seçer."
-    )
-    gc1, gc2 = st.columns(2)
-    with gc1:
-        st.markdown("**Oda (m)**")
-        room_w = st.slider("Oda genişliği (en)",
-                           min_value=2.0, max_value=8.0, value=(3.0, 5.5),
-                           step=0.1, key="g_rw")
-        room_l = st.slider("Oda boyu",
-                           min_value=2.0, max_value=10.0, value=(3.5, 6.0),
-                           step=0.1, key="g_rl")
-        st.markdown("**Kapı (m)**")
-        door_w = st.slider("Kapı genişliği",
-                           min_value=0.90, max_value=1.50, value=(0.95, 1.20),
-                           step=0.05, key="g_dw",
-                           help="≥ 0.90 m (TS 9111). Min eşik altına çekersen "
-                                "baseline mevzuata aykırı çıkabilir.")
-        door_h = st.slider("Kapı yüksekliği",
-                           min_value=2.00, max_value=2.50, value=(2.10, 2.30),
-                           step=0.05, key="g_dh",
-                           help="≥ 2.00 m (TS 9111).")
-    with gc2:
-        st.markdown("**Koridor (m)**")
-        corridor_w = st.slider("Koridor genişliği",
-                               min_value=1.20, max_value=3.00, value=(1.40, 2.20),
-                               step=0.1, key="g_cw",
-                               help="≥ 1.20 m (TS 9111). Eşik altına çekersen "
-                                    "baseline mevzuata aykırı çıkabilir.")
-        corridor_l = st.slider("Koridor uzunluğu",
-                               min_value=2.0, max_value=10.0, value=(3.0, 6.0),
-                               step=0.1, key="g_cl")
-        st.markdown("**Genel**")
-        wall_t = st.slider("Duvar kalınlığı",
-                           min_value=0.10, max_value=0.40, value=0.20,
-                           step=0.05, key="g_wt")
-
-    # Uyarılar
-    if door_w[0] < 0.90 or door_h[0] < 2.00 or corridor_w[0] < 1.20:
-        st.warning(
-            "⚠️ Minimum değerlerden bazıları TS 9111 eşiğinin altında — "
-            "üretilen baseline'lar mevzuata aykırı olabilir."
-        )
+st.info(
+    "💡 Bu sayfada **tüm boyut kararlarını LLM verir** (kat yüksekliği, duvar "
+    "kalınlığı, koridor en/boy, **her odanın ayrı en/boyu**, iç + dış kapı "
+    "boyutları). Boyutları etkilemek istersen bina tarifi prompt'una yaz "
+    "(örn. \"odalar yaklaşık 4-5 m\", \"geniş koridor (2 m+)\")."
+)
 
 # Sistem prompt önizleme
 with st.expander("🔬 Sistem promptu (LLM rolü) — önizleme", expanded=False):
@@ -256,18 +213,8 @@ if st.button("🏠 LLM ile baseline'ları üret", type="primary",
         if len(logs) % 2 == 0 or done == total:
             log_slot.code("\n".join(logs[-15:]))
 
-    # UI'dan slider'larla gelen geometri aralıkları → SynthParamsV2
-    g_params = SynthParamsV2(
-        room_w_min=float(room_w[0]), room_w_max=float(room_w[1]),
-        room_l_min=float(room_l[0]), room_l_max=float(room_l[1]),
-        corridor_w_min=float(corridor_w[0]),
-        corridor_w_max=float(corridor_w[1]),
-        corridor_l_min=float(corridor_l[0]),
-        corridor_l_max=float(corridor_l[1]),
-        door_w_min=float(door_w[0]), door_w_max=float(door_w[1]),
-        door_h_min=float(door_h[0]), door_h_max=float(door_h[1]),
-        wall_thickness=float(wall_t),
-    )
+    # LLM tüm boyutları belirleyecek — params sadece fallback aralıkları içerir.
+    g_params = SynthParamsV2()
 
     try:
         res = run_baseline_pipeline(
@@ -296,11 +243,11 @@ if st.button("🏠 LLM ile baseline'ları üret", type="primary",
         f"{len(res.get('variant_ids', []))} varyant)"
     )
 
-    # Parametre denetimi — gönderilen vs. her IFC'de fiilen kullanılan
-    with st.expander("🔬 Parametre denetimi (gönderilen → kullanılan)",
+    # Parametre denetimi — LLM ne karar verdi, fiilen ne çizildi
+    with st.expander("🔬 Parametre denetimi (UI zorla + LLM kararı + motor çıktısı)",
                      expanded=False):
-        st.markdown("**Gönderilen UI parametreleri:**")
-        sent_params = {
+        st.markdown("**UI'dan zorlanan kısıtlar:**")
+        st.json({
             "🚪 Oda sayısı": int(n_oda_in),
             "🛋️ Salon sayısı": int(n_salon_in),
             "🚶 Koridor sayısı": int(n_kor_in),
@@ -308,65 +255,35 @@ if st.button("🏠 LLM ile baseline'ları üret", type="primary",
             "Layout (zorlanan)": (
                 "lshape" if int(n_kor_in) == 2 else "straight"),
             "Kat sayısı (zorlanan)": 1,
-            "Oda genişlik aralığı (m)": list(room_w),
-            "Oda boy aralığı (m)": list(room_l),
-            "Koridor genişlik aralığı (m)": list(corridor_w),
-            "Koridor boy aralığı (m)": list(corridor_l),
-            "Kapı genişlik aralığı (m)": list(door_w),
-            "Kapı yükseklik aralığı (m)": list(door_h),
-            "Duvar kalınlığı (m)": wall_t,
-        }
-        st.json(sent_params, expanded=True)
+        }, expanded=True)
 
-        st.markdown("**Her IFC için fiilen kullanılan (LLM + motor seçimleri):**")
+        st.markdown("**Her IFC için LLM'in seçtiği boyutlar:**")
         ifc_rows = []
+        all_plans = []
         if res.get("ana_plan"):
-            ap = res["ana_plan"]
-            # Ana baseline'ın gerçek oda/koridor boyutlarını DB'den al
-            ana_rec = storage.get_ifc_model(res["ana_id"]) if res.get("ana_id") else None
-            ana_meta = (ana_rec or {}).get("params", {}) or {}
-            if isinstance(ana_meta, str):
-                import json as _json
-                try:
-                    ana_meta = _json.loads(ana_meta)
-                except Exception:
-                    ana_meta = {}
-            ifc_rows.append({
-                "IFC": "ana_baseline",
-                "Kat": ap.n_storeys,
-                "Oda+Salon": ap.n_rooms_per_floor,
-                "Layout": ap.layout,
-                "Kat yük. (m)": ap.storey_height,
-                "Salon (motor)": ana_meta.get("n_salons", "?"),
-                "Oda boyutları (m)": str(ana_meta.get("room_sizes_m") or {})[:80] + "…",
-                "Kapı (cm)": str(ana_meta.get("door_widths_cm") or {})[:80] + "…",
-            })
+            all_plans.append(("ana_baseline", res["ana_plan"]))
         for i, vp in enumerate(res.get("variant_plans", [])):
-            var_id = (res.get("variant_ids") or [None])[i] if i < len(res.get("variant_ids", [])) else None
-            var_rec = storage.get_ifc_model(var_id) if var_id else None
-            var_meta = (var_rec or {}).get("params", {}) or {}
-            if isinstance(var_meta, str):
-                import json as _json
-                try:
-                    var_meta = _json.loads(var_meta)
-                except Exception:
-                    var_meta = {}
+            all_plans.append((f"varyant_{i+1}", vp))
+        for label, plan in all_plans:
+            room_sizes = "; ".join(
+                f"{r.get('role','?')}={r.get('width',0):.2f}×{r.get('length',0):.2f}"
+                for r in (plan.rooms or [])
+            )[:120]
             ifc_rows.append({
-                "IFC": f"varyant_{i+1}",
-                "Kat": vp.n_storeys,
-                "Oda+Salon": vp.n_rooms_per_floor,
-                "Layout": vp.layout,
-                "Kat yük. (m)": vp.storey_height,
-                "Salon (motor)": var_meta.get("n_salons", "?"),
-                "Oda boyutları (m)": str(var_meta.get("room_sizes_m") or {})[:80] + "…",
-                "Kapı (cm)": str(var_meta.get("door_widths_cm") or {})[:80] + "…",
+                "IFC": label,
+                "Kat yük. (m)": round(plan.storey_height, 2),
+                "Duvar (m)": round(plan.wall_thickness, 2),
+                "Koridor (m)": f"{plan.corridor_width:.2f}×{plan.corridor_length:.2f}",
+                "İç kapı (m)": f"{plan.interior_door_w:.2f}×{plan.interior_door_h:.2f}",
+                "Dış kapı (m)": f"{plan.entrance_door_w:.2f}×{plan.entrance_door_h:.2f}",
+                "Odalar": room_sizes,
             })
         if ifc_rows:
             st.dataframe(pd.DataFrame(ifc_rows), hide_index=True,
                          use_container_width=True)
         st.caption(
-            "💡 'Kat' her zaman 1 (zorlu), 'Layout' zorlu, 'Oda+Salon' zorlu. "
-            "Oda boyutları + kapı genişlikleri UI aralıklarından rastgele örneklenir."
+            "💡 Bütün boyutlar LLM'den geliyor. 'Kat=1', layout, oda+salon "
+            "sayısı UI'dan zorlu kalıyor."
         )
 
     # LLM ölçüm özeti
