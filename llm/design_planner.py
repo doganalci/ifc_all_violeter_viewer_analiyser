@@ -77,6 +77,15 @@ class DesignPlan:
     model: str = ""
     raw_llm_response: str = ""
 
+    # Ölçüm — token sayımı, süre, USD maliyet
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    duration_s: float = 0.0
+    cost_usd: float = 0.0
+    cost_is_estimate: bool = False
+    cost_matched: str = ""
+
     def to_override(self) -> SpecOverride:
         return SpecOverride(
             n_storeys=int(self.n_storeys),
@@ -84,6 +93,10 @@ class DesignPlan:
             layout=str(self.layout),
             storey_height=float(self.storey_height),
         )
+
+    def design_summary(self) -> str:
+        return (f"{self.n_storeys} kat · {self.n_rooms_per_floor} oda/kat · "
+                f"{self.layout} · h={self.storey_height}m")
 
     def to_dict(self) -> dict:
         return {
@@ -96,6 +109,13 @@ class DesignPlan:
             "system_prompt": self.system_prompt,
             "user_prompt": self.user_prompt,
             "raw_llm_response": self.raw_llm_response,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "duration_s": self.duration_s,
+            "cost_usd": self.cost_usd,
+            "cost_is_estimate": self.cost_is_estimate,
+            "cost_matched": self.cost_matched,
         }
 
 
@@ -130,8 +150,16 @@ def plan_variant_baseline(user_template: str, ana_plan: DesignPlan, *,
 
 
 def _call_llm(system_prompt: str, user_prompt: str, model: str) -> DesignPlan:
-    """OpenAI çağrısı + JSON parse. Hata durumunda RuntimeError fırlat."""
+    """OpenAI çağrısı + JSON parse. Token + süre + cost ölçer.
+
+    Hata durumunda RuntimeError fırlatır (yine de süreyi ölçemediği için
+    upstream catch eden taraf süre/maliyet için 0 alır).
+    """
+    import time
+    from llm.pricing import estimate_cost
     from violation_pool.ifc_inject import _chat_with_retry
+
+    t0 = time.time()
     resp = _chat_with_retry(
         model,
         [{"role": "system", "content": system_prompt},
@@ -139,7 +167,16 @@ def _call_llm(system_prompt: str, user_prompt: str, model: str) -> DesignPlan:
         temperature=0.7,
         response_format={"type": "json_object"},
     )
+    duration = time.time() - t0
     content = resp.choices[0].message.content or "{}"
+
+    # Token usage (OpenAI response.usage)
+    usage = getattr(resp, "usage", None)
+    pt = int(getattr(usage, "prompt_tokens", 0) or 0)
+    ct = int(getattr(usage, "completion_tokens", 0) or 0)
+    tt = int(getattr(usage, "total_tokens", pt + ct) or (pt + ct))
+    cost = estimate_cost(model, pt, ct)
+
     try:
         data = json.loads(content)
     except json.JSONDecodeError as e:
@@ -156,4 +193,11 @@ def _call_llm(system_prompt: str, user_prompt: str, model: str) -> DesignPlan:
         user_prompt=user_prompt,
         model=model,
         raw_llm_response=content,
+        prompt_tokens=pt,
+        completion_tokens=ct,
+        total_tokens=tt,
+        duration_s=round(duration, 3),
+        cost_usd=cost["total_usd"],
+        cost_is_estimate=cost["is_estimate"],
+        cost_matched=cost["matched"],
     )

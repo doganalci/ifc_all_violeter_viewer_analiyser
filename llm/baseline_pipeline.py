@@ -27,6 +27,7 @@ from violation_pool.config import settings
 from llm.design_planner import (
     DesignPlan, plan_ana_baseline, plan_variant_baseline,
 )
+from llm.excel_log import log_llm_generation
 from ml.data.synth_baseline_v2 import SynthParamsV2, generate_v2
 
 
@@ -34,6 +35,7 @@ def run_baseline_pipeline(user_template: str,
                           dataset_tag: str, *,
                           variants: int = 5, seed_start: int = 0,
                           model: str = "gpt-4o",
+                          params: SynthParamsV2 | None = None,
                           progress_cb=None) -> dict:
     """Ana baseline + N varyant LLM ile üretir, dosya + DB + defterler.
 
@@ -59,31 +61,52 @@ def run_baseline_pipeline(user_template: str,
     """
     out_dir = settings.ifc_dir / "baseline"
     out_dir.mkdir(parents=True, exist_ok=True)
-    params = SynthParamsV2()
+    params = params or SynthParamsV2()
 
     total = 1 + variants
     done = 0
     errors: list[str] = []
 
+    # Toplam ölçümler (UI'da özet için)
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    total_duration_s = 0.0
+    total_cost_usd = 0.0
+
     # 1) Ana baseline ----------------------------------------------------
     ana_plan: DesignPlan | None = None
     ana_id: str | None = None
     ana_path: str | None = None
+    ana_stem = f"{dataset_tag}_ana_{seed_start:05d}"
     try:
         ana_plan = plan_ana_baseline(user_template, model=model,
                                      seed=seed_start)
     except Exception as e:
         errors.append(f"ana baseline · LLM çağrısı hata: {e}")
+        log_llm_generation(
+            paket=dataset_tag, ifc_name=ana_stem, kind="ana_baseline",
+            model=model, user_prompt=user_template,
+            status="error", error=str(e),
+        )
         if progress_cb:
             progress_cb(done + 1, total, "ana: HATA")
-        # Ana baseline LLM hatası fatal — varyant üretmenin anlamı yok.
         return {"ana_id": None, "ana_plan": None, "ana_path": None,
                 "variant_ids": [], "variant_plans": [], "variant_paths": [],
-                "errors": errors}
+                "errors": errors,
+                "totals": {"prompt_tokens": 0, "completion_tokens": 0,
+                           "duration_s": 0.0, "cost_usd": 0.0,
+                           "n_calls": 0}}
+
+    # Ana plan başarılı — token+süre+cost biriktir
+    total_prompt_tokens += ana_plan.prompt_tokens
+    total_completion_tokens += ana_plan.completion_tokens
+    total_duration_s += ana_plan.duration_s
+    total_cost_usd += ana_plan.cost_usd
 
     ana_id = str(uuid.uuid4())
-    ana_stem = f"{dataset_tag}_ana_{seed_start:05d}"
     ana_path = out_dir / f"{ana_stem}.ifc"
+    ifc_status = "ok"
+    ifc_err = ""
     try:
         info = generate_v2(
             seed=seed_start, out_path=ana_path,
@@ -99,18 +122,37 @@ def run_baseline_pipeline(user_template: str,
         ana_path = str(ana_path)
     except Exception as e:
         errors.append(f"ana baseline · IFC üretim hata: {e}")
+        ifc_status = "error"
+        ifc_err = str(e)
         ana_id = None
         ana_path = None
+
+    # Excel log (LLM başarılı + IFC durumu ne olursa olsun bir satır)
+    log_llm_generation(
+        paket=dataset_tag, ifc_name=ana_stem, kind="ana_baseline",
+        model=model, user_prompt=ana_plan.user_prompt,
+        prompt_tokens=ana_plan.prompt_tokens,
+        completion_tokens=ana_plan.completion_tokens,
+        duration_s=ana_plan.duration_s, cost_usd=ana_plan.cost_usd,
+        design_summary=ana_plan.design_summary(),
+        rationale=ana_plan.rationale,
+        status=ifc_status, error=ifc_err,
+    )
+
     done += 1
     if progress_cb:
         progress_cb(done, total,
                     f"ana: {ana_stem}" if ana_id else "ana: HATA")
 
     if ana_id is None:
-        # Ana çizilemediyse varyant üretmek anlamsız.
         return {"ana_id": None, "ana_plan": ana_plan, "ana_path": None,
                 "variant_ids": [], "variant_plans": [], "variant_paths": [],
-                "errors": errors}
+                "errors": errors,
+                "totals": {"prompt_tokens": total_prompt_tokens,
+                           "completion_tokens": total_completion_tokens,
+                           "duration_s": total_duration_s,
+                           "cost_usd": total_cost_usd,
+                           "n_calls": 1}}
 
     # 2) Varyantlar ------------------------------------------------------
     variant_ids: list[str] = []
@@ -119,7 +161,6 @@ def run_baseline_pipeline(user_template: str,
     for i in range(variants):
         var_seed = seed_start + 1 + i
         var_stem = f"{dataset_tag}_{var_seed:05d}"
-        # Çakışan dosya adı için sayaç
         n = 1
         while (out_dir / f"{var_stem}.ifc").exists():
             var_stem = f"{dataset_tag}_{var_seed:05d}_{n}"
@@ -131,12 +172,26 @@ def run_baseline_pipeline(user_template: str,
             )
         except Exception as e:
             errors.append(f"varyant {var_seed} · LLM hata: {e}")
+            log_llm_generation(
+                paket=dataset_tag, ifc_name=var_stem,
+                kind="variant_baseline", model=model,
+                user_prompt=user_template,
+                status="error", error=str(e),
+            )
             done += 1
             if progress_cb:
                 progress_cb(done, total, f"varyant {var_seed}: LLM HATA")
             continue
 
+        # LLM başarılı → biriktir
+        total_prompt_tokens += var_plan.prompt_tokens
+        total_completion_tokens += var_plan.completion_tokens
+        total_duration_s += var_plan.duration_s
+        total_cost_usd += var_plan.cost_usd
+
         var_id = str(uuid.uuid4())
+        ifc_status = "ok"
+        ifc_err = ""
         try:
             info_v = generate_v2(
                 seed=var_seed, out_path=var_path,
@@ -154,6 +209,21 @@ def run_baseline_pipeline(user_template: str,
             variant_paths.append(str(var_path))
         except Exception as e:
             errors.append(f"varyant {var_seed} · IFC hata: {e}")
+            ifc_status = "error"
+            ifc_err = str(e)
+
+        log_llm_generation(
+            paket=dataset_tag, ifc_name=var_stem,
+            kind="variant_baseline", model=model,
+            user_prompt=var_plan.user_prompt,
+            prompt_tokens=var_plan.prompt_tokens,
+            completion_tokens=var_plan.completion_tokens,
+            duration_s=var_plan.duration_s, cost_usd=var_plan.cost_usd,
+            design_summary=var_plan.design_summary(),
+            rationale=var_plan.rationale,
+            status=ifc_status, error=ifc_err,
+        )
+
         done += 1
         if progress_cb:
             progress_cb(done, total, f"varyant: {var_stem}")
@@ -174,6 +244,7 @@ def run_baseline_pipeline(user_template: str,
     except Exception:
         pass
 
+    n_calls = 1 + len(variant_plans)  # her başarılı LLM çağrısı
     return {
         "ana_id": ana_id,
         "ana_plan": ana_plan,
@@ -182,6 +253,14 @@ def run_baseline_pipeline(user_template: str,
         "variant_plans": variant_plans,
         "variant_paths": variant_paths,
         "errors": errors,
+        "totals": {
+            "prompt_tokens": total_prompt_tokens,
+            "completion_tokens": total_completion_tokens,
+            "total_tokens": total_prompt_tokens + total_completion_tokens,
+            "duration_s": round(total_duration_s, 2),
+            "cost_usd": round(total_cost_usd, 6),
+            "n_calls": n_calls,
+        },
     }
 
 
