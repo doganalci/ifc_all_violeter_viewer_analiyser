@@ -149,12 +149,13 @@ def generate_pure_llm_ifc(user_prompt: str, out_path: Path,
                    + len(f.by_type("IfcWallStandardCase")))
         n_spaces = len(f.by_type("IfcSpace"))
         n_windows = len(f.by_type("IfcWindow"))
-        # Tamamen boşsa "valid ama anlamsız" — geçersiz say
+        # NOT: parse OK ama geometri boş ise yine de valid sayıyoruz —
+        # kullanıcı "LLM ne üretti" görmek istiyor; sadece uyarı veriyoruz.
         if n_walls == 0 and n_spaces == 0 and n_doors == 0:
-            valid = False
-            parse_err = "Parse OK ama hiç IfcWall/IfcSpace/IfcDoor yok"
+            parse_err = ("Parse OK ama hiç IfcWall/IfcSpace/IfcDoor yok "
+                         "(geometrisi eksik IFC)")
     except Exception as e:
-        parse_err = str(e)[:300]
+        parse_err = f"ifcopenshell parse hatası: {str(e)[:280]}"
 
     return PureLLMResult(
         ifc_path=str(out_path) if valid else None,
@@ -176,34 +177,37 @@ def generate_pure_llm_ifc(user_prompt: str, out_path: Path,
 def register_pure_llm_baseline(result: PureLLMResult, *,
                                 dataset_tag: str,
                                 user_prompt: str,
-                                constraints: dict | None = None) -> str | None:
+                                constraints: dict | None = None
+                                ) -> tuple[str | None, str | None]:
     """Geçerli pure-LLM IFC'sini codex1 storage'a baseline olarak yaz.
 
-    Geçersizse hiçbir şey yapmaz, None döner. Aksi halde ifc_id döner.
+    Geçersizse (ifc_path None) (None, sebep) döner.
+    Aksi halde (ifc_id, None) — DB kaydı başarılı.
+    Hata varsa (None, hata_mesajı).
 
     Sayfa 15 (görüntüleyici) üretilen IFC'leri normal baseline olarak görür.
     """
-    if not result.valid or not result.ifc_path:
-        return None
+    if not result.ifc_path:
+        return None, "ifc_path yok (parse hatası)"
     import json
     import uuid as _uuid
     try:
         from violation_pool import ifc_graph, storage
     except Exception as e:
-        print(f"[pure_llm] DB modülleri yok: {e}")
-        return None
+        return None, f"DB modülleri yok: {e}"
 
     ifc_id = str(_uuid.uuid4())
     ifc_p = Path(result.ifc_path)
     stem = ifc_p.parent / ifc_p.stem
+    graph_warning = ""
 
-    # Graph üretmeye çalış (başarısızsa geç)
+    # Graph üretmeye çalış (başarısızsa geç — DB kaydı yine yapılır)
     graph_path = stem.parent / f"{stem.name}.graph.json"
     try:
         ifc_graph.build_and_save(str(ifc_p), str(graph_path))
         graph_path_str = str(graph_path)
     except Exception as e:
-        print(f"[pure_llm] graph üretilemedi: {e}")
+        graph_warning = f" (graph üretilemedi: {str(e)[:80]})"
         graph_path_str = None
 
     # Meta + boş labels
@@ -259,8 +263,7 @@ def register_pure_llm_baseline(result: PureLLMResult, *,
             dataset_tag=dataset_tag,
         )
     except Exception as e:
-        print(f"[pure_llm] DB kaydı atlandı: {e}")
-        return None
+        return None, f"DB kaydı başarısız: {str(e)[:200]}"
 
     # Defteri yenile (best-effort)
     try:
@@ -269,4 +272,4 @@ def register_pure_llm_baseline(result: PureLLMResult, *,
         rebuild_dataset_registry(str(data_home()))
     except Exception:
         pass
-    return ifc_id
+    return ifc_id, (graph_warning.strip() if graph_warning else None)

@@ -284,12 +284,15 @@ if st.button("🧪 Pure LLM ile üret", type="primary",
 
         # Geçerliyse DB'ye baseline olarak kaydet (sayfa 15 görür)
         ifc_id = None
+        db_note: str | None = None
         if r.valid:
-            ifc_id = register_pure_llm_baseline(
+            ifc_id, db_note = register_pure_llm_baseline(
                 r, dataset_tag=ana_ad_clean,
                 user_prompt=user_template,
                 constraints=constraints_dict,
             )
+        else:
+            db_note = "IFC parse edilemedi → DB'ye eklenmedi"
 
         # Excel log
         log_llm_generation(
@@ -313,6 +316,8 @@ if st.button("🧪 Pure LLM ile üret", type="primary",
 
         results.append({
             "n": i + 1, "stem": stem, "valid": r.valid,
+            "db_kayit": "✓" if ifc_id else "❌",
+            "db_not": db_note or "",
             "error": r.parse_error,
             "tokens": r.prompt_tokens + r.completion_tokens,
             "cost_usd": r.cost_usd, "duration_s": r.duration_s,
@@ -321,9 +326,11 @@ if st.button("🧪 Pure LLM ile üret", type="primary",
             "ifc_path": r.ifc_path, "ifc_id": ifc_id,
             "raw_text_path": str(out_path),
         })
+        _label = ('✓ DB' if ifc_id
+                  else ('✓ parse OK, DB ❌' if r.valid
+                        else '❌ parse hatası'))
         bar.progress((i + 1) / n_attempts,
-                     text=f"{i+1}/{n_attempts} · "
-                          f"{'✓ valid + DB' if (r.valid and ifc_id) else ('✓ valid' if r.valid else '❌ invalid')}")
+                     text=f"{i+1}/{n_attempts} · {_label}")
 
     bar.empty()
     dt = time.time() - t0
@@ -390,12 +397,27 @@ if st.button("🧪 Pure LLM ile üret", type="primary",
     # Detay tablo
     with st.expander("📋 Tüm denemelerin detayı", expanded=False):
         df = pd.DataFrame(results)
-        display_cols = ["n", "stem", "valid", "tokens", "cost_usd",
-                        "duration_s", "n_walls", "n_doors", "n_spaces",
-                        "n_windows", "error"]
+        display_cols = ["n", "stem", "valid", "db_kayit", "db_not",
+                        "tokens", "cost_usd", "duration_s",
+                        "n_walls", "n_doors", "n_spaces", "n_windows",
+                        "error"]
         display_cols = [c for c in display_cols if c in df.columns]
         st.dataframe(df[display_cols], hide_index=True,
                      use_container_width=True)
+
+    # DB kayıt özeti
+    n_db = sum(1 for r in results if r.get("ifc_id"))
+    if n_db > 0:
+        st.success(
+            f"✅ {n_db}/{len(results)} IFC veritabanına yazıldı → "
+            f"**🔍 IFC Görüntüleyici (sayfa 15)** açıp `{ana_ad_clean}` "
+            "paketini seç. Burada görünüyor olmalı."
+        )
+    else:
+        st.error(
+            f"🔴 Hiçbir IFC veritabanına yazılmadı ({len(results)} deneme). "
+            "Sayfa 15'te görünmeyecekler. Sebepler için yukarıdaki tabloya bak."
+        )
 
     # Başarısız denemeler
     if n_fail > 0:
@@ -406,11 +428,6 @@ if st.button("🧪 Pure LLM ile üret", type="primary",
                     st.code(r.get("error", "?") or "?", language="text")
                     st.caption(f"Ham .ifc kalıcı: `{r['raw_text_path']}`")
 
-    if n_ok > 0:
-        st.caption(
-            f"✅ {n_ok} geçerli IFC `{ana_ad_clean}` paketine eklendi → "
-            "**🔍 IFC Görüntüleyici** sayfasından incele."
-        )
 
 
 # --- Kapanış notu -------------------------------------------------------
