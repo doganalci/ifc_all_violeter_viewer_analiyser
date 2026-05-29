@@ -59,6 +59,8 @@ def _psets(el) -> dict:
 
 
 def build_graph(ifc_path: str | Path) -> nx.MultiDiGraph:
+    import uuid as _uuid
+
     import ifcopenshell
 
     f = ifcopenshell.open(str(ifc_path))
@@ -77,7 +79,12 @@ def build_graph(ifc_path: str | Path) -> nx.MultiDiGraph:
                 gid = getattr(el, "GlobalId", None)
             except Exception:
                 continue
-            if not gid or gid in accepted:
+            # Pure-LLM IFC'lerinde GlobalId sık eksik. Synthetic id ata
+            # (graph'ta entity görsün diye — gerçek GUID olmadığından
+            # gerçek IFC referansı için kullanılmaz, sadece görsel).
+            if not gid:
+                gid = f"__nogid__{t}_{_uuid.uuid4().hex[:8]}"
+            if gid in accepted:
                 continue
             try:
                 g.add_node(

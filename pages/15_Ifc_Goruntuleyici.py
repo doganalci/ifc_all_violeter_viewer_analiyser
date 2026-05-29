@@ -572,7 +572,9 @@ def _render_ifc(col, title: str, meshes, *,
 def _render_graph(col, title: str, sample, *,
                   vio: set = set(), decoy: set = set(), normal: set = set(),
                   pred: set = set(), height: int = PANEL_H_GR_GRID,
-                  key: str, max_state: str | None = None) -> None:
+                  key: str, max_state: str | None = None,
+                  ifc_path: str | None = None,
+                  graph_path: str | None = None) -> None:
     with col:
         # Başlık + büyütme butonu
         if max_state:
@@ -584,7 +586,44 @@ def _render_graph(col, title: str, sample, *,
             st.markdown(f"##### Graph · {title}")
         if sample is None:
             st.info("📭 Gösterilecek veri yok")
+            # IFC var ama graph yoksa "Graph üret" butonu
+            if ifc_path and graph_path:
+                if st.button("🔧 Graph'ı yeniden üret",
+                             key=f"rebuild_{key}",
+                             help="ifc_graph.build_and_save'i tekrar çalıştır "
+                                  "(yeni fix dahil)."):
+                    try:
+                        from violation_pool import ifc_graph
+                        ifc_graph.build_and_save(ifc_path, graph_path)
+                        st.cache_data.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Graph üretim hatası: {e}")
             return
+        n_nodes = len(sample.graph.nodes)
+        # Diagnostic: eğer çok az node var ama IFC zengin → pure-LLM eksik
+        # GUID/RelAggregates sorunu olabilir.
+        if n_nodes < 5 and ifc_path:
+            summary = _ifc_entity_summary(ifc_path)
+            if summary:
+                total_entities = sum(summary["counts"].values())
+                if total_entities > n_nodes + 3:
+                    st.caption(
+                        f"ℹ️ Graph {n_nodes} node ama IFC {total_entities} "
+                        "entity içeriyor. **Pure-LLM eksik GlobalId/IfcRel\\*** "
+                        "sorunu — graph yapısı zayıf. 🔧 ile yeniden üret."
+                    )
+                    if st.button("🔧 Graph'ı yeniden üret",
+                                 key=f"rebuild_sparse_{key}",
+                                 help="ifc_graph fix'i ile orphan entity'leri "
+                                      "de node olarak ekle"):
+                        try:
+                            from violation_pool import ifc_graph as _ig
+                            _ig.build_and_save(ifc_path, graph_path)
+                            st.cache_data.clear()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Graph üretim hatası: {e}")
         merged_vio = vio | pred
         clicked = interactive_agraph(
             sample.graph,
@@ -612,6 +651,7 @@ _col_args = {
         "title": f"Ana baseline · `{ana_entry['name']}`",
         "ifc_meshes": ana_meshes, "sample": ana_sample,
         "ifc_path": ana_entry.get("ifc_path"),
+        "graph_path": ana_entry.get("graph_path"),
         "vio": set(), "decoy": set(), "normal": set(),
         "pred": set(),
     },
@@ -619,6 +659,7 @@ _col_args = {
         "title": vio_title,
         "ifc_meshes": violated_meshes, "sample": violated_sample,
         "ifc_path": violated_entry["ifc_path"] if violated_entry else None,
+        "graph_path": violated_entry["graph_path"] if violated_entry else None,
         "vio": vio_show, "decoy": dec_show, "normal": nor_show,
         "pred": set(),
     },
@@ -626,6 +667,7 @@ _col_args = {
         "title": pred_title,
         "ifc_meshes": pred_meshes, "sample": pred_sample,
         "ifc_path": violated_entry["ifc_path"] if violated_entry else None,
+        "graph_path": violated_entry["graph_path"] if violated_entry else None,
         "vio": set(), "decoy": set(), "normal": set(),
         "pred": predicted_guids if cached else set(),
     },
@@ -643,7 +685,9 @@ def _render_col_panel(c: dict, *, panel_key: str, mode: str) -> None:
         _render_graph(st, c["title"], c["sample"],
                       vio=c["vio"], decoy=c["decoy"], normal=c["normal"],
                       pred=c["pred"], height=PANEL_H_GR_BOTH,
-                      key=f"{panel_key}_g", max_state=f"{panel_key}_graph")
+                      key=f"{panel_key}_g", max_state=f"{panel_key}_graph",
+                      ifc_path=c.get("ifc_path"),
+                      graph_path=c.get("graph_path"))
     elif mode == "3d":
         _render_ifc(st, c["title"], c["ifc_meshes"],
                     vio=c["vio"], decoy=c["decoy"], normal=c["normal"],
@@ -654,7 +698,9 @@ def _render_col_panel(c: dict, *, panel_key: str, mode: str) -> None:
         _render_graph(st, c["title"], c["sample"],
                       vio=c["vio"], decoy=c["decoy"], normal=c["normal"],
                       pred=c["pred"], height=PANEL_H_GR_FULL,
-                      key=f"{panel_key}_g_full")
+                      key=f"{panel_key}_g_full",
+                      ifc_path=c.get("ifc_path"),
+                      graph_path=c.get("graph_path"))
 
 
 if mxd is not None:
@@ -687,13 +733,19 @@ else:
     st.markdown("### 🕸️ Graph (node tıkla → vurgula · sürükle → düzenle)")
     g1, g2, g3 = st.columns(3)
     _render_graph(g1, _col_args["ana"]["title"], ana_sample,
-                  key="ana_g_grid", max_state="ana_graph")
+                  key="ana_g_grid", max_state="ana_graph",
+                  ifc_path=_col_args["ana"].get("ifc_path"),
+                  graph_path=_col_args["ana"].get("graph_path"))
     _render_graph(g2, _col_args["vio"]["title"], violated_sample,
                   vio=vio_show, decoy=dec_show, normal=nor_show,
-                  key="vio_g_grid", max_state="vio_graph")
+                  key="vio_g_grid", max_state="vio_graph",
+                  ifc_path=_col_args["vio"].get("ifc_path"),
+                  graph_path=_col_args["vio"].get("graph_path"))
     _render_graph(g3, _col_args["pred"]["title"], pred_sample,
                   pred=predicted_guids if cached else set(),
-                  key="pred_g_grid", max_state="pred_graph")
+                  key="pred_g_grid", max_state="pred_graph",
+                  ifc_path=_col_args["pred"].get("ifc_path"),
+                  graph_path=_col_args["pred"].get("graph_path"))
 
 # --- Inspector ----------------------------------------------------------
 if current:
