@@ -66,8 +66,49 @@ def _safe_meshes(ifc_path: str | None):
         st.error(f"ifcopenshell yok: {e}")
         return None
     except Exception as e:
-        st.error(f"IFC açılamadı ({Path(ifc_path).name}): {e}")
+        # Pure LLM IFC'lerde tipik: parse OK ama geometry kernel patlar.
+        err = str(e)
+        if any(s in err.lower() for s in (
+                "variant", "out of range", "step parsing", "geometry")):
+            st.error(
+                f"❌ Geometri çıkarılamadı: `{Path(ifc_path).name}`\n\n"
+                f"Hata: `{err[:180]}`\n\n"
+                "**Bu pure-LLM IFC'lerinde tipiktir** — dosya parse oluyor "
+                "ama geometry kernel iç tutarsızlık görüyor (yanlış variant "
+                "indexi, eksik placement, bozuk representation vs.). Hibrit "
+                "(sayfa 10) IFC'leri tessellate olur. Aşağıda entity sayıları "
+                "fallback olarak görünür."
+            )
+        else:
+            st.error(f"IFC açılamadı ({Path(ifc_path).name}): {e}")
         return None
+
+
+def _ifc_entity_summary(ifc_path: str | None) -> dict | None:
+    """3D çıkmazsa fallback için entity sayıları + örnek isimler."""
+    if not ifc_path or not Path(ifc_path).exists():
+        return None
+    try:
+        import ifcopenshell
+        f = ifcopenshell.open(str(ifc_path))
+    except Exception:
+        return None
+    out = {
+        "Walls (IfcWall+StandardCase)":
+            len(f.by_type("IfcWall")) + len(f.by_type("IfcWallStandardCase")),
+        "Doors (IfcDoor)": len(f.by_type("IfcDoor")),
+        "Windows (IfcWindow)": len(f.by_type("IfcWindow")),
+        "Spaces (IfcSpace)": len(f.by_type("IfcSpace")),
+        "Storey (IfcBuildingStorey)": len(f.by_type("IfcBuildingStorey")),
+        "Slabs (IfcSlab)": len(f.by_type("IfcSlab")),
+    }
+    # İlk birkaç entity adı
+    sample_names = []
+    for cls in ("IfcDoor", "IfcWall", "IfcSpace"):
+        for e in f.by_type(cls)[:3]:
+            nm = getattr(e, "Name", None) or "(isimsiz)"
+            sample_names.append(f"{cls}: {nm}")
+    return {"counts": out, "samples": sample_names}
 
 
 # ---- Model inference helpers (legacy/03'ten) -------------------------------
@@ -493,7 +534,8 @@ def _panel_max_btn(target_state: str, btn_key: str) -> None:
 def _render_ifc(col, title: str, meshes, *,
                 vio: set = set(), decoy: set = set(), normal: set = set(),
                 pred: set = set(), height: int = PANEL_H_3D_GRID,
-                key: str, max_state: str | None = None) -> None:
+                key: str, max_state: str | None = None,
+                fallback_ifc_path: str | None = None) -> None:
     with col:
         # Başlık + büyütme butonu
         if max_state:
@@ -504,6 +546,19 @@ def _render_ifc(col, title: str, meshes, *,
         else:
             st.markdown(f"##### {title}")
         if meshes is None:
+            # Geometri çıkmadı — fallback: entity summary
+            if fallback_ifc_path:
+                summary = _ifc_entity_summary(fallback_ifc_path)
+                if summary:
+                    st.warning(
+                        "📊 3D çizilemedi → entity özeti (fallback)"
+                    )
+                    st.json(summary["counts"], expanded=True)
+                    if summary["samples"]:
+                        with st.expander("İlk entity'ler"):
+                            for s in summary["samples"]:
+                                st.code(s, language="text")
+                    return
             st.info("📭 Gösterilecek veri yok")
             return
         merged_vio = vio | pred
@@ -556,18 +611,21 @@ _col_args = {
     "ana": {
         "title": f"Ana baseline · `{ana_entry['name']}`",
         "ifc_meshes": ana_meshes, "sample": ana_sample,
+        "ifc_path": ana_entry.get("ifc_path"),
         "vio": set(), "decoy": set(), "normal": set(),
         "pred": set(),
     },
     "vio": {
         "title": vio_title,
         "ifc_meshes": violated_meshes, "sample": violated_sample,
+        "ifc_path": violated_entry["ifc_path"] if violated_entry else None,
         "vio": vio_show, "decoy": dec_show, "normal": nor_show,
         "pred": set(),
     },
     "pred": {
         "title": pred_title,
         "ifc_meshes": pred_meshes, "sample": pred_sample,
+        "ifc_path": violated_entry["ifc_path"] if violated_entry else None,
         "vio": set(), "decoy": set(), "normal": set(),
         "pred": predicted_guids if cached else set(),
     },
@@ -577,11 +635,11 @@ _col_args = {
 def _render_col_panel(c: dict, *, panel_key: str, mode: str) -> None:
     """Tek bir sütunun (col_name) ilgili modda 3D + graph render."""
     if mode == "both":
-        # 3D ve graph stacked, ikisi de büyük
         _render_ifc(st, c["title"], c["ifc_meshes"],
                     vio=c["vio"], decoy=c["decoy"], normal=c["normal"],
                     pred=c["pred"], height=PANEL_H_3D_BOTH,
-                    key=f"{panel_key}_3d", max_state=f"{panel_key}_3d")
+                    key=f"{panel_key}_3d", max_state=f"{panel_key}_3d",
+                    fallback_ifc_path=c.get("ifc_path"))
         _render_graph(st, c["title"], c["sample"],
                       vio=c["vio"], decoy=c["decoy"], normal=c["normal"],
                       pred=c["pred"], height=PANEL_H_GR_BOTH,
@@ -590,7 +648,8 @@ def _render_col_panel(c: dict, *, panel_key: str, mode: str) -> None:
         _render_ifc(st, c["title"], c["ifc_meshes"],
                     vio=c["vio"], decoy=c["decoy"], normal=c["normal"],
                     pred=c["pred"], height=PANEL_H_3D_FULL,
-                    key=f"{panel_key}_3d_full")
+                    key=f"{panel_key}_3d_full",
+                    fallback_ifc_path=c.get("ifc_path"))
     elif mode == "graph":
         _render_graph(st, c["title"], c["sample"],
                       vio=c["vio"], decoy=c["decoy"], normal=c["normal"],
@@ -612,14 +671,17 @@ else:
     st.markdown("### 🧱 3D Görselleştirme")
     c1, c2, c3 = st.columns(3)
     _render_ifc(c1, _col_args["ana"]["title"], _col_args["ana"]["ifc_meshes"],
-                key="ana_ifc_grid", max_state="ana_3d")
+                key="ana_ifc_grid", max_state="ana_3d",
+                fallback_ifc_path=_col_args["ana"].get("ifc_path"))
     _render_ifc(c2, _col_args["vio"]["title"], _col_args["vio"]["ifc_meshes"],
                 vio=vio_show, decoy=dec_show, normal=nor_show,
-                key="vio_ifc_grid", max_state="vio_3d")
+                key="vio_ifc_grid", max_state="vio_3d",
+                fallback_ifc_path=_col_args["vio"].get("ifc_path"))
     _render_ifc(c3, _col_args["pred"]["title"],
                 _col_args["pred"]["ifc_meshes"],
                 pred=predicted_guids if cached else set(),
-                key="pred_ifc_grid", max_state="pred_3d")
+                key="pred_ifc_grid", max_state="pred_3d",
+                fallback_ifc_path=_col_args["pred"].get("ifc_path"))
 
     # Graph row
     st.markdown("### 🕸️ Graph (node tıkla → vurgula · sürükle → düzenle)")
