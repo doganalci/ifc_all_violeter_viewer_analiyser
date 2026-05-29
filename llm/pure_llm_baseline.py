@@ -86,18 +86,32 @@ def _strip_code_block(text: str) -> str:
 
 
 def generate_pure_llm_ifc(user_prompt: str, out_path: Path,
-                          model: str = "gpt-5") -> PureLLMResult:
+                          model: str = "gpt-5",
+                          constraints: dict | None = None) -> PureLLMResult:
     """LLM'den ham IFC text'i alıp dosyaya yaz + parse kontrolü.
 
-    Hatalar (LLM çağrısı, JSON parse vs.) yukarı fırlar; geçersiz IFC
-    (parse hatası) ise valid=False + parse_error ile dönülür (rapor için).
+    Args:
+        user_prompt: kullanıcının bina tarifi.
+        out_path: çıktı .ifc dosya yolu.
+        model: OpenAI model adı.
+        constraints: opsiyonel UI kısıtları {n_rooms, n_salons, n_corridors,
+            n_storeys, n_doors_min/max, prefs} — design_planner ile aynı
+            şema. Prompt'a ZORUNLU + TERCİH bloğu olarak eklenir.
+
+    Hatalar (LLM çağrısı vs.) yukarı fırlar; geçersiz IFC (parse hatası)
+    valid=False + parse_error ile dönülür.
     """
+    from llm.design_planner import _build_constraints_block
     from llm.pricing import estimate_cost
     from violation_pool.ifc_inject import _chat_with_retry
 
+    # Constraints'i prompt'a ekle
+    constraints_block = _build_constraints_block(constraints)
+    full_user_prompt = user_prompt.strip() + constraints_block
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_prompt},
+        {"role": "user", "content": full_user_prompt},
     ]
 
     t0 = time.time()
@@ -148,7 +162,7 @@ def generate_pure_llm_ifc(user_prompt: str, out_path: Path,
         parse_error=parse_err,
         raw_response=content,
         model=model,
-        user_prompt=user_prompt,
+        user_prompt=full_user_prompt,
         prompt_tokens=pt,
         completion_tokens=ct,
         duration_s=round(duration, 2),
@@ -157,3 +171,102 @@ def generate_pure_llm_ifc(user_prompt: str, out_path: Path,
         cost_matched=cost["matched"],
         n_doors=n_doors, n_walls=n_walls, n_spaces=n_spaces, n_windows=n_windows,
     )
+
+
+def register_pure_llm_baseline(result: PureLLMResult, *,
+                                dataset_tag: str,
+                                user_prompt: str,
+                                constraints: dict | None = None) -> str | None:
+    """Geçerli pure-LLM IFC'sini codex1 storage'a baseline olarak yaz.
+
+    Geçersizse hiçbir şey yapmaz, None döner. Aksi halde ifc_id döner.
+
+    Sayfa 15 (görüntüleyici) üretilen IFC'leri normal baseline olarak görür.
+    """
+    if not result.valid or not result.ifc_path:
+        return None
+    import json
+    import uuid as _uuid
+    try:
+        from violation_pool import ifc_graph, storage
+    except Exception as e:
+        print(f"[pure_llm] DB modülleri yok: {e}")
+        return None
+
+    ifc_id = str(_uuid.uuid4())
+    ifc_p = Path(result.ifc_path)
+    stem = ifc_p.parent / ifc_p.stem
+
+    # Graph üretmeye çalış (başarısızsa geç)
+    graph_path = stem.parent / f"{stem.name}.graph.json"
+    try:
+        ifc_graph.build_and_save(str(ifc_p), str(graph_path))
+        graph_path_str = str(graph_path)
+    except Exception as e:
+        print(f"[pure_llm] graph üretilemedi: {e}")
+        graph_path_str = None
+
+    # Meta + boş labels
+    meta = {
+        "ifc_id": ifc_id, "kind": "baseline",
+        "source": "pure_llm", "model": result.model,
+        "n_walls": result.n_walls, "n_doors": result.n_doors,
+        "n_spaces": result.n_spaces, "n_windows": result.n_windows,
+        "duration_s": result.duration_s, "cost_usd": result.cost_usd,
+        "prompt_tokens": result.prompt_tokens,
+        "completion_tokens": result.completion_tokens,
+        "total_tokens": result.prompt_tokens + result.completion_tokens,
+    }
+    meta_path = stem.parent / f"{stem.name}.meta.json"
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
+                         encoding="utf-8")
+
+    labels_path = stem.parent / f"{stem.name}.labels.json"
+    labels_path.write_text(json.dumps({
+        "violated_id": ifc_id, "labels": [],
+        "_meta": "pure_llm baseline — no violations by design",
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    try:
+        storage.create_ifc_model(
+            id=ifc_id, kind="baseline",
+            name=stem.name,
+            parent_id=None,            # pure_llm'de hiyerarşi yok
+            pool_run_id=None,
+            params={
+                "kind_label": "pure_llm_baseline",
+                "model": result.model,
+                "constraints": constraints or {},
+                "geometry": {
+                    "n_walls": result.n_walls, "n_doors": result.n_doors,
+                    "n_spaces": result.n_spaces,
+                    "n_windows": result.n_windows,
+                },
+                "llm_measurement": {
+                    "prompt_tokens": result.prompt_tokens,
+                    "completion_tokens": result.completion_tokens,
+                    "duration_s": result.duration_s,
+                    "cost_usd": result.cost_usd,
+                },
+            },
+            file_path=str(ifc_p),
+            meta_path=str(meta_path),
+            labels_path=str(labels_path),
+            graph_path=graph_path_str,
+            llm_model=result.model,
+            prompt=user_prompt,
+            status="ok", error=None,
+            dataset_tag=dataset_tag,
+        )
+    except Exception as e:
+        print(f"[pure_llm] DB kaydı atlandı: {e}")
+        return None
+
+    # Defteri yenile (best-effort)
+    try:
+        from ml.tracking import rebuild_dataset_registry
+        from paths import data_home
+        rebuild_dataset_registry(str(data_home()))
+    except Exception:
+        pass
+    return ifc_id
