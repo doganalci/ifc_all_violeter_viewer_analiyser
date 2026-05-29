@@ -20,6 +20,7 @@ Boş veri:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -129,16 +130,77 @@ def _all_violateds_under_ana(root: str, ana_id: str) -> list[dict]:
 
     Yapı: ana → varyant baseline → violated. Ana'ya doğrudan + varyantlara
     bağlı tüm violated'ları topla (varyantlar gizli, hepsi tek listede).
+
+    Sıralama dışarıdan uygulanır (_apply_sort).
     """
     direct = violated_children(root, ana_id)
-    # Ana'nın çocuk baseline'ları (varyantlar)
     all_bls = list_entries(root, kind="baseline", require_graph=False)
     variants = [b for b in all_bls if b.get("parent_id") == ana_id]
     indirect = []
     for v in variants:
         indirect.extend(violated_children(root, v["id"]))
-    out = direct + indirect
-    return sorted(out, key=lambda x: x.get("name") or "")
+    return direct + indirect
+
+
+# ---- Sıralama yardımcıları --------------------------------------------------
+
+SORT_OPTIONS = {
+    "📅 Üretim zamanı (yeni → eski)": "time_desc",
+    "📅 Üretim zamanı (eski → yeni)": "time_asc",
+    "🔤 Alfabetik (A → Z)": "alpha_asc",
+    "🔤 Alfabetik (Z → A)": "alpha_desc",
+}
+
+
+def _mtime_of(p: str | None) -> float:
+    """Dosya değişiklik zamanı (epoch). Yoksa 0."""
+    if not p:
+        return 0.0
+    try:
+        return os.path.getmtime(p)
+    except OSError:
+        return 0.0
+
+
+def _entry_mtime(e: dict) -> float:
+    """Bir IFC entry'sinin temsili mtime'ı (IFC > graph > labels)."""
+    for k in ("ifc_path", "graph_path", "labels_path", "meta_path"):
+        t = _mtime_of(e.get(k))
+        if t > 0:
+            return t
+    return 0.0
+
+
+def _apply_sort(entries: list[dict], sort_key: str) -> list[dict]:
+    """Verilen IFC entry listesini sort_key'e göre sırala."""
+    if sort_key == "time_desc":
+        return sorted(entries, key=lambda e: -_entry_mtime(e))
+    if sort_key == "time_asc":
+        return sorted(entries, key=_entry_mtime)
+    if sort_key == "alpha_desc":
+        return sorted(entries, key=lambda e: (e.get("name") or "").lower(),
+                      reverse=True)
+    # default alpha_asc
+    return sorted(entries, key=lambda e: (e.get("name") or "").lower())
+
+
+def _sort_packages(packages: list[str], all_baselines: list[dict],
+                    pkg_of_fn, sort_key: str) -> list[str]:
+    """Paket adlarını sort_key'e göre sırala.
+
+    Zaman tabanlı sıralama: paketin en yeni baseline'ının mtime'ı.
+    """
+    if sort_key in ("time_desc", "time_asc"):
+        def _pkg_latest(pkg: str) -> float:
+            return max(
+                (_entry_mtime(b) for b in all_baselines
+                 if pkg_of_fn(b) == pkg),
+                default=0.0,
+            )
+        rev = (sort_key == "time_desc")
+        return sorted(packages, key=_pkg_latest, reverse=rev)
+    rev = (sort_key == "alpha_desc")
+    return sorted(packages, key=lambda p: p.lower(), reverse=rev)
 
 
 # ---- Page ------------------------------------------------------------------
@@ -172,9 +234,28 @@ def _pkg_of(b: dict) -> str:
     return re.sub(r"_\d+$", "", b.get("name") or "(isimsiz)") or "(isimsiz)"
 
 
-packages = sorted({_pkg_of(b) for b in all_baselines})
+# --- Sıralama (tüm listelere uygulanır) ----------------------------------
+sc1, sc2 = st.columns([3, 1])
+with sc1:
+    _sort_label = st.selectbox(
+        "🔀 Sıralama",
+        options=list(SORT_OPTIONS.keys()),
+        index=0,
+        help="Paketleri, baseline'ları ve ihlallileri bu sıraya göre listele. "
+             "Default: yeni üretilenler üstte.",
+        key="mv_sort",
+    )
+with sc2:
+    if st.button("🔄 Yenile (cache'i atla)", use_container_width=True,
+                 help="DB yeniden okunsun (yeni üretilen bir şey görünmüyorsa)"):
+        st.cache_data.clear()
+        st.rerun()
+sort_key = SORT_OPTIONS[_sort_label]
+
+packages_set = {_pkg_of(b) for b in all_baselines}
 pkg_counts = {p: sum(1 for b in all_baselines if _pkg_of(b) == p)
-              for p in packages}
+              for p in packages_set}
+packages = _sort_packages(list(packages_set), all_baselines, _pkg_of, sort_key)
 
 sel_pkg = st.selectbox(
     "📦 Ana baseline (paket)",
@@ -183,13 +264,16 @@ sel_pkg = st.selectbox(
     key="mv_pkg",
 )
 
-pkg_baselines = [b for b in all_baselines if _pkg_of(b) == sel_pkg]
+pkg_baselines = _apply_sort(
+    [b for b in all_baselines if _pkg_of(b) == sel_pkg], sort_key,
+)
 _ana_candidates = [b for b in pkg_baselines if not b.get("parent_id")]
 if _ana_candidates:
+    # Sort'a göre seç: yeni → eski ise en yeni ana baseline col 1'de
     ana_entry = _ana_candidates[0]
     _hier_mode = "LLM (parent_id ile)"
 else:
-    ana_entry = sorted(pkg_baselines, key=lambda b: b.get("name") or "")[0]
+    ana_entry = pkg_baselines[0]
     _hier_mode = "düz (eski prosedürel)"
 
 st.caption(
@@ -197,7 +281,9 @@ st.caption(
 )
 
 # --- İhlalli seçici -----------------------------------------------------
-all_violateds = _all_violateds_under_ana(root, ana_entry["id"])
+all_violateds = _apply_sort(
+    _all_violateds_under_ana(root, ana_entry["id"]), sort_key,
+)
 violated_entry: dict | None = None
 st.markdown(f"#### İhlalli ({len(all_violateds)} adet — ana'ya transitively bağlı)")
 if all_violateds:
