@@ -28,8 +28,9 @@ Thumbs.db
 # Üretilen veri — IFC_DATA_HOME'da kalmalı, koda sızmamalı.
 # Yollar leading slash ile sadece repo köküne anchor'lanıyor — yoksa
 # `data/` paterni `ml/data/` python paketini de yutuyordu (geçmiş bug).
+# NOT: /docs/ kaldırıldı — repo köküne pipeline dokümantasyonu (docs/)
+# eklendi. RAG dokümanları IFC_DATA_HOME/docs/ altında, repo dışı.
 /data/
-/docs/
 /vectorstore/
 /exports/
 /ifc_models/
