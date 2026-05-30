@@ -536,7 +536,12 @@ def record_usage(
 
 def record_usage_from_openai(usage_obj, *, operation: str, model: str,
                              **refs) -> None:
-    """OpenAI response.usage objesinden veya dict'inden kaydeder."""
+    """OpenAI response.usage objesinden veya dict'inden kaydeder.
+
+    `refs` içinde `record_usage`'ın bilmediği anahtarlar (örn. phase, paket)
+    gelirse hatayla durmak yerine note alanına serialize edilir; böylece
+    çağıran tarafta arbitrary metadata gönderebilir.
+    """
     if usage_obj is None:
         return
     if hasattr(usage_obj, "prompt_tokens"):
@@ -547,9 +552,18 @@ def record_usage_from_openai(usage_obj, *, operation: str, model: str,
         pt = usage_obj.get("prompt_tokens", 0) or 0
         ct = usage_obj.get("completion_tokens", 0) or 0
         tt = usage_obj.get("total_tokens")
+
+    known = {"pool_run_id", "ifc_model_id", "collection", "note"}
+    clean = {k: v for k, v in refs.items() if k in known}
+    extras = {k: v for k, v in refs.items() if k not in known}
+    if extras:
+        extras_str = " ".join(f"{k}={v}" for k, v in extras.items())
+        clean["note"] = (clean.get("note") + " " + extras_str
+                         if clean.get("note") else extras_str)
+
     record_usage(operation=operation, model=model,
                  prompt_tokens=pt, completion_tokens=ct, total_tokens=tt,
-                 **refs)
+                 **clean)
 
 
 def list_usage(
