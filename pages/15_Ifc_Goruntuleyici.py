@@ -159,10 +159,13 @@ def _run_inference(sample, run_path: Path, threshold: float):
         probs = torch.sigmoid(logits).cpu().numpy()
     preds = (probs >= threshold).astype(np.int64)
     predicted = {data.node_ids[i] for i, p in enumerate(preds) if p == 1}
+    probs_by_guid = {data.node_ids[i]: float(probs[i])
+                     for i in range(len(data.node_ids))}
     return predicted, {
         "n_predicted": int(preds.sum()),
         "threshold": threshold,
         "run_name": run_path.name,
+        "probs_by_guid": probs_by_guid,
     }
 
 
@@ -480,11 +483,14 @@ with dc1:
             )
 
             if applied:
+                st.markdown(
+                    "**Neye dokunuldu, neden ihlal sayıldı:**"
+                )
                 rows = []
                 for l in applied:
                     rows.append({
                         "Kategori": l.get("category") or "?",
-                        "Başlık": (l.get("title") or "")[:60],
+                        "İhlal başlığı": (l.get("title") or "")[:60],
                         "Eleman": f"{l.get('ifc_type', '?')} "
                                   f"({l.get('ifc_name') or '—'})",
                         "Attribute": l.get("attribute") or l.get("action"),
@@ -496,15 +502,21 @@ with dc1:
                     })
                 st.dataframe(pd.DataFrame(rows), hide_index=True,
                              use_container_width=True)
-                # Detaylı reason kutuları (kısa tabloya sığmayan açıklamalar)
+                # Her ihlal için sebep + ölçü/kural detayı
+                st.markdown("**Detaylı gerekçe (üretici LLM'den):**")
                 for i, l in enumerate(applied, 1):
-                    rsn = l.get("reason")
-                    if rsn:
-                        st.markdown(
-                            f"**#{i} — {l.get('title', '?')}** · "
-                            f"_{l.get('category', '?')}_"
-                        )
-                        st.caption(rsn)
+                    title = l.get("title", "?")
+                    cat = l.get("category", "?")
+                    sev = l.get("severity") or ""
+                    thr = l.get("threshold")
+                    rsn = l.get("reason") or "—"
+                    head = f"**#{i} {title}** · _{cat}_"
+                    if sev:
+                        head += f" · severity={sev}"
+                    if thr is not None:
+                        head += f" · eşik={thr}"
+                    st.markdown(head)
+                    st.caption(rsn)
             else:
                 st.warning(
                     "Uygulanmış gerçek ihlal yok. Skip nedenleri için "
@@ -554,23 +566,47 @@ with dc2:
                                if l.get("ifc_global_id")}
                 vio_truth = {gid for gid, y in violated_sample.y.items()
                              if y == 1}
+                probs_by_guid = info.get("probs_by_guid") or {}
+
+                def _truth_desc(lab: dict) -> str:
+                    """Üretici LLM'in bu ihlal için yazdığı kısa açıklama."""
+                    t = (lab.get("title") or "").strip()
+                    c = lab.get("category")
+                    a = lab.get("attribute")
+                    vb = lab.get("value_before")
+                    va = lab.get("value_after")
+                    parts = []
+                    if t:
+                        parts.append(t)
+                    if c:
+                        parts.append(f"[{c}]")
+                    if a is not None:
+                        parts.append(f"{a}: {vb} → {va}")
+                    return " · ".join(parts) or "—"
 
                 rows = []
-                for guid in sorted(predicted_guids):
+                for guid in sorted(predicted_guids,
+                                   key=lambda g: -probs_by_guid.get(g, 0)):
                     lab = lbl_by_guid.get(guid, {})
                     is_truth = guid in vio_truth
                     is_decoy = bool(lab.get("is_decoy"))
                     if is_truth:
-                        verdict = "✅ TP (gerçek ihlal)"
+                        verdict = "✅ TP"
+                        why = _truth_desc(lab)
                     elif is_decoy:
-                        verdict = "🪤 Decoy'a yandı"
+                        verdict = "🪤 Decoy"
+                        why = ("Decoy etiketi — gerçek ihlal değil; "
+                               "model honeypot'a takıldı.")
                     else:
-                        verdict = "❌ FP (yanlış pozitif)"
+                        verdict = "❌ FP"
+                        why = ("Bu node etiketli ihlal değil; model "
+                               "yanlış pozitif verdi.")
                     rows.append({
                         "Verdict": verdict,
+                        "Skor": round(probs_by_guid.get(guid, 0.0), 3),
                         "Eleman": lab.get("ifc_type") or "?",
                         "Ad": lab.get("ifc_name") or "—",
-                        "Kategori": lab.get("category") or "—",
+                        "Neden / İhlal": why[:120],
                         "GUID": guid[:10],
                     })
                 if rows:
@@ -579,19 +615,28 @@ with dc2:
                 # Kaçırılan ihlaller (FN)
                 missed = sorted(vio_truth - set(predicted_guids))
                 if missed:
-                    st.markdown(f"**❌ Kaçırılan {len(missed)} gerçek ihlal (FN)**")
+                    st.markdown(
+                        f"**❌ Kaçırılan {len(missed)} gerçek ihlal (FN)** "
+                        "— model bunları gözden kaçırdı:"
+                    )
                     mrows = []
                     for guid in missed:
                         lab = lbl_by_guid.get(guid, {})
                         mrows.append({
+                            "Skor": round(probs_by_guid.get(guid, 0.0), 3),
                             "Eleman": lab.get("ifc_type") or "?",
                             "Ad": lab.get("ifc_name") or "—",
-                            "Kategori": lab.get("category") or "—",
-                            "Attribute": lab.get("attribute") or "—",
+                            "Atlanan ihlal": _truth_desc(lab)[:120],
                             "GUID": guid[:10],
                         })
                     st.dataframe(pd.DataFrame(mrows), hide_index=True,
                                  use_container_width=True)
+                    st.caption(
+                        "💡 Skor < eşik olduğu için ihlal sayılmadılar. "
+                        "Eleman tipleri hep aynıysa (örn. hep `IfcColumn`), "
+                        "model muhtemelen o tipte ihlal görmemiş — dataset "
+                        "kompozisyonu o yönde eğik."
+                    )
 
 
 # --- Etiket katmanları ---------------------------------------------------
