@@ -601,6 +601,10 @@ with dc2:
             st.caption("Önce 'Tahmin Yap' butonuna bas.")
         else:
             info = cached.get("info") or {}
+            # Panel sample yüklemesinden önce çalışıyor; ihtiyacımız varsa
+            # burada cache'den çekiyoruz (load_sample_for @st.cache_data).
+            _vsample = (load_sample_for(violated_entry)
+                        if violated_entry else None)
             st.caption(
                 f"Run: `{cached.get('run')}` · eşik {cached.get('threshold')}"
                 f" · model bu IFC'deki "
@@ -609,12 +613,12 @@ with dc2:
             )
 
             # Tahminleri ihlalli IFC'nin gerçek etiketleriyle karşılaştır
-            if violated_entry and violated_sample is not None:
+            if violated_entry and _vsample is not None:
                 doc = labels_summary(violated_entry) or {}
                 lbl_by_guid = {l.get("ifc_global_id"): l
                                for l in doc.get("labels", [])
                                if l.get("ifc_global_id")}
-                vio_truth = {gid for gid, y in violated_sample.y.items()
+                vio_truth = {gid for gid, y in _vsample.y.items()
                              if y == 1}
                 probs_by_guid = info.get("probs_by_guid") or {}
 
