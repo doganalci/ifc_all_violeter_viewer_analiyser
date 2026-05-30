@@ -26,6 +26,7 @@ def run_rag_violation_pipeline(
     collection_name: str = "default",
     categories: list[str] | None = None,
     n_violations_per_ifc: int = 3,
+    violated_per_baseline: int = 1,
     decoy_ratio: float = 0.20,
     compliant_addition_ratio: float = 0.0,
     rag_k: int = 8,
@@ -144,67 +145,76 @@ def run_rag_violation_pipeline(
         if "id" not in v or not v["id"]:
             v["id"] = f"rag_{i}_{v.get('category', 'misc')[:8]}"
 
-    # 5) Her baseline için ihlal seç + enjekte
-    total = len(baseline_ids)
-    for idx, base_id in enumerate(baseline_ids):
-        try:
-            base = storage.get_ifc_model(base_id)
-            if not base or base.get("status") != "ok":
-                continue
-            # Havuzdan rastgele seç (yer değiştirmeden)
-            selected_n = min(n_violations_per_ifc, len(pool))
-            selected = random.sample(pool, selected_n)
+    # 5) Her baseline için violated_per_baseline kez ihlal seç + enjekte.
+    # Aynı baseline'a birden fazla violated IFC üretmek dataset
+    # çeşitliliğini artırır; her seferinde havuzdan farklı örnek seçilir
+    # ve dosya adı _violated1, _violated2 olarak otomatik artar.
+    violated_per_baseline = max(1, int(violated_per_baseline))
+    total = len(baseline_ids) * violated_per_baseline
+    step = 0
+    for base_id in baseline_ids:
+        base = storage.get_ifc_model(base_id)
+        if not base or base.get("status") != "ok":
+            step += violated_per_baseline
+            continue
+        for variant_i in range(violated_per_baseline):
+            step += 1
+            try:
+                selected_n = min(n_violations_per_ifc, len(pool))
+                selected = random.sample(pool, selected_n)
 
-            inj = ifc_inject.inject_violations(
-                baseline_id=base_id,
-                violations=selected,
-                pool_run_id=None,
-                model=model,
-                decoy_ratio=float(decoy_ratio),
-                compliant_addition_ratio=float(compliant_addition_ratio),
-                fill_from_pool=True,
-                generation_params={
-                    "source": "rag_pipeline",
-                    "dataset_tag": dataset_tag,
-                    "collection": collection_name,
-                    "categories": list(categories) if categories else "all",
-                    "n_violations_per_ifc": int(n_violations_per_ifc),
-                    "decoy_ratio": float(decoy_ratio),
-                    "compliant_addition_ratio": float(compliant_addition_ratio),
-                    "rag_k": int(rag_k),
-                    "pool_oversample": float(pool_oversample),
-                    "model": model,
-                    "rag_query": rag_query,
-                    "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                },
-            )
+                inj = ifc_inject.inject_violations(
+                    baseline_id=base_id,
+                    violations=selected,
+                    pool_run_id=None,
+                    model=model,
+                    decoy_ratio=float(decoy_ratio),
+                    compliant_addition_ratio=float(compliant_addition_ratio),
+                    fill_from_pool=True,
+                    generation_params={
+                        "source": "rag_pipeline",
+                        "dataset_tag": dataset_tag,
+                        "collection": collection_name,
+                        "categories": list(categories) if categories else "all",
+                        "n_violations_per_ifc": int(n_violations_per_ifc),
+                        "violated_per_baseline": violated_per_baseline,
+                        "variant_index": variant_i + 1,
+                        "decoy_ratio": float(decoy_ratio),
+                        "compliant_addition_ratio": float(compliant_addition_ratio),
+                        "rag_k": int(rag_k),
+                        "pool_oversample": float(pool_oversample),
+                        "model": model,
+                        "rag_query": rag_query,
+                        "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    },
+                )
 
-            summary = inj.get("summary", {})
-            results["ok"] += 1
-            results["violations_applied"] += summary.get(
-                "n_violations_applied",
-                summary.get("n_applied", len(selected))
-            )
-            results["decoys"] += summary.get("decoys",
-                                              summary.get("n_decoys", 0))
-            results["compliant"] += summary.get("compliant_additions", 0)
-            results["items"].append({
-                "baseline": base.get("name"),
-                "violated": Path(inj.get("ifc_path", "")).stem,
-                "ifc_path": inj.get("ifc_path"),
-                "labels_path": inj.get("labels_path"),
-                "summary": summary,
-            })
-        except Exception as e:
-            results["err"] += 1
-            results["items"].append({
-                "baseline": base_id[:8],
-                "error": str(e)[:200],
-            })
-        if progress_cb:
-            progress_cb(idx + 1, total,
-                        f"{idx + 1}/{total} · {results['ok']} OK · "
-                        f"{results['err']} HATA")
+                summary = inj.get("summary", {})
+                results["ok"] += 1
+                results["violations_applied"] += summary.get(
+                    "n_violations_applied",
+                    summary.get("applied", summary.get("n_applied", len(selected))),
+                )
+                results["decoys"] += summary.get("decoys",
+                                                  summary.get("n_decoys", 0))
+                results["compliant"] += summary.get("compliant_additions", 0)
+                results["items"].append({
+                    "baseline": base.get("name"),
+                    "violated": Path(inj.get("ifc_path", "")).stem,
+                    "ifc_path": inj.get("ifc_path"),
+                    "labels_path": inj.get("labels_path"),
+                    "summary": summary,
+                })
+            except Exception as e:
+                results["err"] += 1
+                results["items"].append({
+                    "baseline": base.get("name") or base_id[:8],
+                    "error": str(e)[:200],
+                })
+            if progress_cb:
+                progress_cb(step, total,
+                            f"{step}/{total} · {results['ok']} OK · "
+                            f"{results['err']} HATA")
 
     results["duration_s"] = round(time.time() - t0, 2)
 

@@ -164,41 +164,48 @@ st.caption(f"✓ {len(selected_cats)} / {len(CATEGORIES)} kategori seçili.")
 
 # --- 4. Üretim parametreleri ----------------------------------------------
 st.subheader("4. Üretim parametreleri")
-p1, p2, p3, p4 = st.columns(4)
-with p1:
-    n_per_ifc = st.number_input(
-        "🎯 İhlal / IFC",
-        min_value=1, max_value=10, value=3,
-        help="Her baseline'a kaç gerçek ihlal enjekte edilecek.",
+pa, pb = st.columns(2)
+with pa:
+    violated_per_baseline = st.slider(
+        "📦 İhlalli IFC / baseline",
+        min_value=1, max_value=20, value=1,
+        help="Her baseline'dan kaç farklı ihlalli IFC üretilsin? "
+             "Aynı baseline'a birden fazla variant üretilirse her "
+             "seferinde havuzdan farklı ihlal kombinasyonu seçilir; "
+             "dosya adı _violated1, _violated2 olarak artar.",
     )
-with p2:
+    n_per_ifc = st.slider(
+        "🎯 İhlal / IFC dosyası",
+        min_value=1, max_value=15, value=3,
+        help="Her ihlalli IFC dosyasının içine kaç gerçek ihlal enjekte edilecek.",
+    )
+    rag_k = st.slider(
+        "📚 RAG k (chunk sayısı)",
+        min_value=4, max_value=20, value=8,
+        help="LLM'e bağlam olarak verilecek doküman chunk sayısı.",
+    )
+with pb:
     decoy_ratio = st.slider(
-        "🪤 Decoy oranı",
+        "🪤 Decoy oranı (sahte etiket — IFC değişmez)",
         min_value=0.0, max_value=1.0, value=0.20, step=0.05,
         help="İhlal sayısının yüzdesi kadar SAHTE (decoy) etiket eklenir. "
              "IFC modifiye edilmez. Modelin yanlış pozitif yapmasını "
              "ölçmek için.",
     )
-with p3:
     compliant_ratio = st.slider(
-        "🟢 Uyumlu ekleme oranı",
+        "🟢 Uyumlu ekleme oranı (gerçek kolon — kural bozulmaz)",
         min_value=0.0, max_value=1.0, value=0.30, step=0.05,
         help="İhlal sayısının yüzdesi kadar KURAL BOZMAYAN kolon eklenir "
              "(IFC GERÇEKTEN değişir; etiket=compliant). Modelin "
              "'kolon görünce ihlal de' kestirmesini engellemek için "
              "negatif eğitim örneği.",
     )
-with p4:
-    rag_k = st.number_input(
-        "📚 RAG k (chunk sayısı)",
-        min_value=4, max_value=20, value=8,
-        help="LLM'e bağlam olarak verilecek doküman chunk sayısı.",
-    )
 
 n_baselines = next(
     (t["baseline"] for t in base_tags if t["tag"] == sel_tag), 0
 )
-expected_violations = int(n_per_ifc) * int(n_baselines)
+expected_violated_ifcs = int(n_baselines) * int(violated_per_baseline)
+expected_violations = int(n_per_ifc) * expected_violated_ifcs
 
 
 # --- 5. Model -------------------------------------------------------------
@@ -232,18 +239,21 @@ with mc[2]:
               help="RAG havuz ~5s + her inject ~2s")
 
 st.markdown(
-    "**Beklenen sonuç** — her baseline 1 ihlalli IFC dosyası üretir; "
-    "ihlaller bu dosyaların içine konulur:"
+    f"**Beklenen sonuç** — {n_baselines} baseline × "
+    f"{int(violated_per_baseline)} variant = "
+    f"{expected_violated_ifcs} ihlalli IFC dosyası, her birinin içine "
+    f"{int(n_per_ifc)} ihlal:"
 )
 sm = st.columns(5)
 sm[0].metric("Baseline sayısı", n_baselines,
-             help="Paketteki temiz IFC sayısı (her biri için 1 violated üretilir).")
-sm[1].metric("Violated IFC (dosya)", n_baselines,
-             help=f"Baseline başına 1 dosya. İhlal/IFC={int(n_per_ifc)} → "
-                  "her dosyanın İÇİNDE bu kadar ihlal olur.")
+             help="Paketteki temiz IFC sayısı.")
+sm[1].metric("Violated IFC (dosya)", expected_violated_ifcs,
+             help=f"{n_baselines} baseline × "
+                  f"{int(violated_per_baseline)} variant = "
+                  f"{expected_violated_ifcs}")
 sm[2].metric("Toplam ihlal (içerik)", expected_violations,
-             help=f"{n_baselines} dosya × {int(n_per_ifc)} ihlal = "
-                  f"{expected_violations}")
+             help=f"{expected_violated_ifcs} dosya × {int(n_per_ifc)} ihlal "
+                  f"= {expected_violations}")
 sm[3].metric("Toplam decoy ≈",
              int(expected_violations * decoy_ratio),
              help="Sahte etiket (IFC değişmez).")
@@ -275,6 +285,7 @@ if st.button("🤖 RAG'dan ihlal üret + enjekte et",
             categories=(selected_cats
                         if len(selected_cats) < len(CATEGORIES) else None),
             n_violations_per_ifc=int(n_per_ifc),
+            violated_per_baseline=int(violated_per_baseline),
             decoy_ratio=float(decoy_ratio),
             compliant_addition_ratio=float(compliant_ratio),
             rag_k=int(rag_k),
