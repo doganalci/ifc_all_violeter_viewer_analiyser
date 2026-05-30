@@ -164,7 +164,7 @@ st.caption(f"✓ {len(selected_cats)} / {len(CATEGORIES)} kategori seçili.")
 
 # --- 4. Üretim parametreleri ----------------------------------------------
 st.subheader("4. Üretim parametreleri")
-p1, p2, p3 = st.columns(3)
+p1, p2, p3, p4 = st.columns(4)
 with p1:
     n_per_ifc = st.number_input(
         "🎯 İhlal / IFC",
@@ -180,6 +180,15 @@ with p2:
              "ölçmek için.",
     )
 with p3:
+    compliant_ratio = st.slider(
+        "🟢 Uyumlu ekleme oranı",
+        min_value=0.0, max_value=1.0, value=0.30, step=0.05,
+        help="İhlal sayısının yüzdesi kadar KURAL BOZMAYAN kolon eklenir "
+             "(IFC GERÇEKTEN değişir; etiket=compliant). Modelin "
+             "'kolon görünce ihlal de' kestirmesini engellemek için "
+             "negatif eğitim örneği.",
+    )
+with p4:
     rag_k = st.number_input(
         "📚 RAG k (chunk sayısı)",
         min_value=4, max_value=20, value=8,
@@ -208,27 +217,39 @@ with mc[0]:
     else:
         model = _pick
 with mc[1]:
-    # Tahmini maliyet: 1 RAG çağrı + N inject çağrı (N=ihlal sayısı)
-    # RAG: ~3000 input + 5000 output (havuz büyük)
-    # Inject: ~2000 input + 500 output (her ihlal için)
-    n_inject_calls = expected_violations  # her ihlal 1 _propose_edit
+    # Tahmini maliyet: 1 RAG çağrı + N inject çağrı + M compliant çağrı
+    expected_compliant = int(round(expected_violations * compliant_ratio))
+    n_inject_calls = expected_violations + expected_compliant
     rag_call_cost = estimate_cost(model, 3000, 5000)["total_usd"]
     inject_call_cost = estimate_cost(model, 2000, 500)["total_usd"]
     total_est = rag_call_cost + n_inject_calls * inject_call_cost
     st.metric("🧮 Tahmini maliyet", f"${total_est:.4f}",
-              help=f"1 RAG havuz + {n_inject_calls} inject çağrı")
+              help=f"1 RAG havuz + {n_inject_calls} inject çağrı "
+                   f"({expected_violations} ihlal + {expected_compliant} uyumlu)")
 with mc[2]:
     st.metric("⏱️ Tahmini süre",
               f"~{5 + n_inject_calls * 2}s",
-              help="RAG havuz ~5s + her ihlal ~2s")
+              help="RAG havuz ~5s + her inject ~2s")
 
-st.markdown("**Beklenen sonuç:**")
-sm = st.columns(4)
-sm[0].metric("Baseline sayısı", n_baselines)
-sm[1].metric("İhlalli IFC üretilecek", n_baselines)
-sm[2].metric("Toplam ihlal", expected_violations)
-sm[3].metric("Toplam decoy (yaklaşık)",
-             int(expected_violations * decoy_ratio))
+st.markdown(
+    "**Beklenen sonuç** — her baseline 1 ihlalli IFC dosyası üretir; "
+    "ihlaller bu dosyaların içine konulur:"
+)
+sm = st.columns(5)
+sm[0].metric("Baseline sayısı", n_baselines,
+             help="Paketteki temiz IFC sayısı (her biri için 1 violated üretilir).")
+sm[1].metric("Violated IFC (dosya)", n_baselines,
+             help=f"Baseline başına 1 dosya. İhlal/IFC={int(n_per_ifc)} → "
+                  "her dosyanın İÇİNDE bu kadar ihlal olur.")
+sm[2].metric("Toplam ihlal (içerik)", expected_violations,
+             help=f"{n_baselines} dosya × {int(n_per_ifc)} ihlal = "
+                  f"{expected_violations}")
+sm[3].metric("Toplam decoy ≈",
+             int(expected_violations * decoy_ratio),
+             help="Sahte etiket (IFC değişmez).")
+sm[4].metric("Toplam uyumlu ≈", expected_compliant,
+             help="Kural bozmayan kolon ekleme (IFC GERÇEKTEN değişir, "
+                  "etiket=compliant).")
 
 
 # --- 6. Çalıştır ----------------------------------------------------------
@@ -255,6 +276,7 @@ if st.button("🤖 RAG'dan ihlal üret + enjekte et",
                         if len(selected_cats) < len(CATEGORIES) else None),
             n_violations_per_ifc=int(n_per_ifc),
             decoy_ratio=float(decoy_ratio),
+            compliant_addition_ratio=float(compliant_ratio),
             rag_k=int(rag_k),
             model=model.strip() or "gpt-4o",
             progress_cb=_cb,
@@ -289,12 +311,13 @@ if st.button("🤖 RAG'dan ihlal üret + enjekte et",
             f"🎉 Bitti — {res['ok']} ihlalli IFC üretildi · {dt:.1f}s"
         )
 
-    m = st.columns(5)
+    m = st.columns(6)
     m[0].metric("İhlalli IFC", res["ok"])
     m[1].metric("Hata", res["err"])
     m[2].metric("Uygulanan ihlal", res["violations_applied"])
     m[3].metric("Decoy etiket", res["decoys"])
-    m[4].metric("RAG havuz", res["pool_size"])
+    m[4].metric("Uyumlu ekleme", res.get("compliant", 0))
+    m[5].metric("RAG havuz", res["pool_size"])
 
     # İhlal başına detay
     if res.get("items"):

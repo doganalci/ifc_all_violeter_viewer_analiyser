@@ -75,6 +75,35 @@ UYGULANAMAZSA:
 Sadece JSON döndür, başka hiçbir metin yazma."""
 
 
+COMPLIANT_ADDITION_PROMPT = """Sen bir BIM editörsün. Görevin: bu binaya
+fiziksel bir kolon (IfcColumn) ekle AMA hiçbir erişilebilirlik kuralını
+bozma. Amaç: modele 'kolon = ihlal' yanılgısını öğretmemek için
+'kural bozmayan kolon' örneği üretmek (negatif eğitim örneği).
+
+KISITLAR:
+- Kolon kapıdan / rampa / merdiven girişinden EN AZ 1.50 m uzakta olmalı
+  (manevra alanı kuralı: 1.50 m × 1.50 m).
+- Koridor merkez aksından uzak, mümkünse duvara yapışık (offset 0.10-0.25 m).
+- Tipik boyut: küçük ve duvar yanı: [0.20, 0.20, 2.50] veya benzeri.
+- Asansör/WC/giriş kapılarının yakın çevresinde KONUMLANDIRMA.
+
+ÇIKTI:
+{
+  "applicable": true,
+  "action": "add_obstruction",
+  "reference_guid": "GUID",                  // duvar veya space referansı
+  "ifc_type": "IfcWall|IfcSpace",
+  "obstruction_size": [0.20, 0.20, 2.50],
+  "offset": 0.15,                            // duvardan/referanstan uzaklık (m)
+  "rationale": "Duvara 15 cm uzaklıkta küçük kolon; kapıdan 2.10 m → kural ok."
+}
+
+UYGUN HEDEF YOKSA:
+{"applicable": false, "reason": "kısa neden"}
+
+Sadece JSON döndür."""
+
+
 def _client() -> OpenAI:
     return OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
 
@@ -158,6 +187,35 @@ def _propose_edit(violation: dict, cat: list[dict], model: str,
         getattr(resp, "usage", None),
         operation="ifc_inject", model=model,
         note=(violation.get("title") or violation.get("id") or "")[:80],
+        **(usage_meta or {}),
+    )
+    return _parse_json(resp.choices[0].message.content or "")
+
+
+def _propose_compliant_addition(cat: list[dict], model: str,
+                                usage_meta: dict | None = None) -> dict:
+    """LLM'den 'kural bozmayan bir kolon' önerisi al.
+
+    Mevcut _apply_add_obstruction ile uyumlu JSON döndürür; tek fark
+    konumlandırma niyeti — modelin 'kolon = ihlal' kestirmesini bozmak.
+    """
+    user = (
+        "Aşağıdaki binaya kuralı bozmayacak şekilde küçük bir kolon ekle "
+        "(negatif eğitim örneği).\n\nKatalog:\n" + _short_catalog(cat)
+    )
+    resp = _chat_with_retry(
+        model,
+        [
+            {"role": "system", "content": COMPLIANT_ADDITION_PROMPT},
+            {"role": "user", "content": user},
+        ],
+        temperature=0.4,
+        response_format={"type": "json_object"},
+    )
+    storage.record_usage_from_openai(
+        getattr(resp, "usage", None),
+        operation="ifc_compliant_add", model=model,
+        note="compliant_addition",
         **(usage_meta or {}),
     )
     return _parse_json(resp.choices[0].message.content or "")
@@ -349,6 +407,7 @@ def inject_violations(
     decoy_seed: int | None = None,
     fill_from_pool: bool = True,
     max_replacement_attempts: int | None = None,
+    compliant_addition_ratio: float = 0.0,
     generation_params: dict | None = None,
 ) -> dict:
     """violations: havuzdan seçilmiş ihlal dict'leri.
@@ -529,6 +588,72 @@ def inject_violations(
             })
             decoys_added += 1
 
+    # ----- Uyumlu eklemeler (compliant additions) -----
+    # Gerçekten IFC'ye kolon ekler AMA kuralı bozmaz; negatif eğitim
+    # örneği. Modelin 'kolon görünce ihlal de' kestirmesini engeller.
+    compliant_added = 0
+    compliant_addition_ratio = max(0.0, float(compliant_addition_ratio or 0.0))
+    n_compliant_target = int(round(applied * compliant_addition_ratio))
+    compliant_attempts = 0
+    inject_meta_c = dict(inject_meta)
+    inject_meta_c["phase"] = "compliant_addition"
+    while compliant_added < n_compliant_target and compliant_attempts < n_compliant_target * 3 + 3:
+        compliant_attempts += 1
+        try:
+            sug = _propose_compliant_addition(cat, model,
+                                              usage_meta=inject_meta_c)
+        except Exception as e:
+            labels.append({
+                "violation_id": None,
+                "title": "[COMPLIANT] LLM hata",
+                "category": "Uyumlu ekleme",
+                "severity": None, "threshold": None, "evidence": [],
+                "ifc_global_id": None, "ifc_type": None, "ifc_name": None,
+                "attribute": None, "value_before": None, "value_after": None,
+                "status": "skipped", "is_decoy": False,
+                "action": "compliant_addition",
+                "is_replacement": False,
+                "reason": f"LLM hata: {e}",
+                "applied_at": datetime.utcnow().isoformat(timespec="seconds"),
+            })
+            continue
+        if not sug.get("applicable"):
+            continue
+        try:
+            info = _apply_add_obstruction(src, sug)
+        except Exception as e:
+            labels.append({
+                "violation_id": None,
+                "title": "[COMPLIANT] uygulama hatası",
+                "category": "Uyumlu ekleme",
+                "severity": None, "threshold": None, "evidence": [],
+                "ifc_global_id": None, "ifc_type": "IfcColumn",
+                "ifc_name": None,
+                "attribute": "[ADDED]", "value_before": None,
+                "value_after": None,
+                "status": "skipped", "is_decoy": False,
+                "action": "compliant_addition",
+                "is_replacement": False,
+                "reason": f"uygulama hatası: {e}",
+                "applied_at": datetime.utcnow().isoformat(timespec="seconds"),
+            })
+            continue
+        labels.append({
+            "violation_id": None,
+            "title": "[COMPLIANT] Kural bozmayan kolon",
+            "category": "Uyumlu ekleme",
+            "severity": None, "threshold": None, "evidence": [],
+            **info,
+            "status": "compliant",
+            "is_decoy": False,
+            "action": "compliant_addition",
+            "is_replacement": False,
+            "reason": sug.get("rationale") or
+                      "Kuralı bozmayan negatif eğitim örneği.",
+            "applied_at": datetime.utcnow().isoformat(timespec="seconds"),
+        })
+        compliant_added += 1
+
     src.write(str(out_ifc))
 
     summary = {
@@ -538,6 +663,8 @@ def inject_violations(
         "replaced_from_pool": replaced,
         "decoys": decoys_added,
         "decoy_ratio": decoy_ratio,
+        "compliant_additions": compliant_added,
+        "compliant_addition_ratio": compliant_addition_ratio,
     }
     # Tanılama: applied=0 ise neden? İlk birkaç skip sebebini topla.
     if applied == 0 and skipped > 0:

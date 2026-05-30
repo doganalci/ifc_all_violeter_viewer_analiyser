@@ -27,6 +27,7 @@ def run_rag_violation_pipeline(
     categories: list[str] | None = None,
     n_violations_per_ifc: int = 3,
     decoy_ratio: float = 0.20,
+    compliant_addition_ratio: float = 0.0,
     rag_k: int = 8,
     pool_oversample: float = 2.5,
     model: str = "gpt-4o",
@@ -71,7 +72,7 @@ def run_rag_violation_pipeline(
     t0 = time.time()
     results: dict = {
         "ok": 0, "err": 0,
-        "violations_applied": 0, "decoys": 0,
+        "violations_applied": 0, "decoys": 0, "compliant": 0,
         "pool_size": 0, "rag_chunks": 0,
         "items": [],
     }
@@ -160,6 +161,7 @@ def run_rag_violation_pipeline(
                 pool_run_id=None,
                 model=model,
                 decoy_ratio=float(decoy_ratio),
+                compliant_addition_ratio=float(compliant_addition_ratio),
                 fill_from_pool=True,
                 generation_params={
                     "source": "rag_pipeline",
@@ -168,6 +170,7 @@ def run_rag_violation_pipeline(
                     "categories": list(categories) if categories else "all",
                     "n_violations_per_ifc": int(n_violations_per_ifc),
                     "decoy_ratio": float(decoy_ratio),
+                    "compliant_addition_ratio": float(compliant_addition_ratio),
                     "rag_k": int(rag_k),
                     "pool_oversample": float(pool_oversample),
                     "model": model,
@@ -182,7 +185,9 @@ def run_rag_violation_pipeline(
                 "n_violations_applied",
                 summary.get("n_applied", len(selected))
             )
-            results["decoys"] += summary.get("n_decoys", 0)
+            results["decoys"] += summary.get("decoys",
+                                              summary.get("n_decoys", 0))
+            results["compliant"] += summary.get("compliant_additions", 0)
             results["items"].append({
                 "baseline": base.get("name"),
                 "violated": Path(inj.get("ifc_path", "")).stem,

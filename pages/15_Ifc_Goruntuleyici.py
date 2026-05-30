@@ -475,10 +475,15 @@ with dc1:
             applied = [l for l in labels
                        if l.get("status") == "applied" and not l.get("is_decoy")]
             decoys = [l for l in labels if l.get("is_decoy")]
+            compliants = [l for l in labels
+                          if l.get("status") == "compliant"
+                          and l.get("action") == "compliant_addition"]
             skipped = [l for l in labels if l.get("status") == "skipped"]
 
             st.caption(
-                f"**{len(applied)}** uygulanan · **{len(decoys)}** decoy · "
+                f"**{len(applied)}** uygulanan ihlal · "
+                f"**{len(decoys)}** decoy · "
+                f"**{len(compliants)}** uyumlu ekleme · "
                 f"**{len(skipped)}** atlandı  ·  "
                 f"model: `{violated_entry.get('llm_model') or '?'}`"
             )
@@ -562,6 +567,20 @@ with dc1:
                     "GUID": (l.get("ifc_global_id") or "")[:10],
                 } for l in decoys]
                 st.dataframe(pd.DataFrame(drows), hide_index=True,
+                             use_container_width=True)
+
+            if compliants:
+                st.markdown(
+                    "**🟢 Uyumlu eklemeler** (IFC'ye gerçekten kolon eklendi "
+                    "ama kural BOZULMADI — negatif eğitim örneği)"
+                )
+                crows = [{
+                    "Eleman": l.get("ifc_type") or "IfcColumn",
+                    "Detay": (l.get("value_after") or "")[:80],
+                    "Neden uyumlu": (l.get("reason") or "")[:80],
+                    "GUID": (l.get("ifc_global_id") or "")[:10],
+                } for l in compliants]
+                st.dataframe(pd.DataFrame(crows), hide_index=True,
                              use_container_width=True)
 
             if skipped:
