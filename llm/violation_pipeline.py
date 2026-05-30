@@ -174,6 +174,7 @@ def run_rag_violation_pipeline(
                 "baseline": base.get("name"),
                 "violated": Path(inj.get("ifc_path", "")).stem,
                 "ifc_path": inj.get("ifc_path"),
+                "labels_path": inj.get("labels_path"),
                 "summary": summary,
             })
         except Exception as e:

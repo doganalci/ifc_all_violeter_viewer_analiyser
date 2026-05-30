@@ -299,28 +299,71 @@ if st.button("🤖 RAG'dan ihlal üret + enjekte et",
     # İhlal başına detay
     if res.get("items"):
         st.markdown("### 📋 Üretilen IFC'ler")
+        import json as _json
+
+        def _read_applied(labels_path: str | None) -> tuple[list[str], int]:
+            """labels.json'dan uygulanan ihlal başlıklarını + skip sayısını çek."""
+            if not labels_path:
+                return [], 0
+            try:
+                doc = _json.loads(Path(labels_path).read_text(encoding="utf-8"))
+            except Exception:
+                return [], 0
+            titles, skipped = [], 0
+            for l in doc.get("labels", []):
+                if l.get("is_decoy"):
+                    continue
+                if l.get("status") == "applied":
+                    titles.append(l.get("title") or "?")
+                elif l.get("status") == "skipped":
+                    skipped += 1
+            return titles, skipped
+
         rows = []
         for it in res["items"]:
             if "error" in it:
                 rows.append({
                     "Baseline": it["baseline"],
-                    "Violated": "—",
+                    "Violated IFC": "—",
                     "Durum": f"❌ {it['error'][:80]}",
-                    "İhlal": 0, "Decoy": 0,
+                    "Uygulanan": 0, "İstenen": int(n_per_ifc), "Atlanan": 0,
+                    "İhlal başlıkları": "—",
+                    "Decoy": 0,
                 })
             else:
                 summary = it.get("summary", {})
+                applied_n = summary.get(
+                    "n_violations_applied",
+                    summary.get("applied", summary.get("n_applied", 0)))
+                req = summary.get("requested", int(n_per_ifc))
+                titles, skipped_n = _read_applied(it.get("labels_path"))
+                title_str = "; ".join(titles[:3])
+                if len(titles) > 3:
+                    title_str += f"  …(+{len(titles) - 3})"
                 rows.append({
                     "Baseline": it["baseline"],
-                    "Violated": it.get("violated", "?"),
-                    "Durum": "✓ OK",
-                    "İhlal": summary.get(
-                        "n_violations_applied",
-                        summary.get("n_applied", 0)),
-                    "Decoy": summary.get("n_decoys", 0),
+                    "Violated IFC": it.get("violated", "?"),
+                    "Durum": "✓ OK" if applied_n >= req else "⚠️ kısmi",
+                    "Uygulanan": applied_n,
+                    "İstenen": req,
+                    "Atlanan": skipped_n,
+                    "İhlal başlıkları": title_str or "—",
+                    "Decoy": summary.get("n_decoys",
+                                         summary.get("decoys", 0)),
                 })
         st.dataframe(pd.DataFrame(rows), hide_index=True,
                      use_container_width=True)
+        # "neden 5 dedim 2 oldu" tanısı
+        n_partial = sum(1 for r in rows if r.get("Durum") == "⚠️ kısmi")
+        if n_partial:
+            st.info(
+                f"ℹ️ {n_partial} IFC istenen sayıda ihlal uygulanamadan "
+                "bitti. **Sebep:** havuzdaki bazı ihlaller bu baseline'a "
+                "uygulanabilir hedef bulamadı (örn. baseline'da yeterli "
+                "kapı/rampa yok). Sayfa 15'te ihlalli IFC'yi seçip "
+                "'🔴 İhlaller' expander'ında **Atlanan ihlaller** "
+                "bölümüne bak — LLM hangi nedenle pas geçtiği orada."
+            )
 
     st.caption(
         f"📒 Defter güncel · Sonraki: **🔍 Sayfa 15 — IFC Görüntüleyici** → "
