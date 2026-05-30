@@ -127,6 +127,7 @@ def list_entries(root: str, kind: str | None = None,
             "status": e.status,
             "graph_ok": graph_ok,
             "dataset_tag": getattr(e, "dataset_tag", None),
+            "llm_model": getattr(e, "llm_model", None),
         })
     return out
 

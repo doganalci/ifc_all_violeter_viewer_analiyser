@@ -8,6 +8,7 @@ from typing import Iterable
 from openai import OpenAI
 
 from . import storage
+from ._chat import safe_chat
 from .config import settings
 from .prompts import NAIVE_PROMPT, OPTIMIZED_PROMPT, build_user_message
 
@@ -118,7 +119,8 @@ def generate_naive(
           '{"violations":[{"description":"..."}]}'
     )
     eff_model = model or settings.llm_model
-    resp = _client().chat.completions.create(
+    resp = safe_chat(
+        _client(),
         model=eff_model,
         messages=[{"role": "user", "content": msg}],
         temperature=0.4,
@@ -143,7 +145,8 @@ def generate_optimized(
     """Method 2: optimized system prompt + user prompt, no context."""
     user_msg = user_prompt.strip() + _count_suffix(n, avoid_titles)
     eff_model = model or settings.llm_model
-    resp = _client().chat.completions.create(
+    resp = safe_chat(
+        _client(),
         model=eff_model,
         messages=[
             {"role": "system", "content": OPTIMIZED_PROMPT},
@@ -186,7 +189,8 @@ def generate_rag(
     """Method 3: same optimized prompt as method 2 + RAG context."""
     user_msg = build_user_message(user_prompt, context_chunks) + _count_suffix(n, avoid_titles)
     eff_model = model or settings.llm_model
-    resp = _client().chat.completions.create(
+    resp = safe_chat(
+        _client(),
         model=eff_model,
         messages=[
             {"role": "system", "content": OPTIMIZED_PROMPT},

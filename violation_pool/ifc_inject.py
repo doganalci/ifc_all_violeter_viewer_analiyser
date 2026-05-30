@@ -123,40 +123,16 @@ def _parse_json(text: str) -> dict:
 
 def _chat_with_retry(model: str, messages: list, *, max_retries: int = 6,
                      **kwargs):
-    """OpenAI chat çağrısı + 429/5xx için exponential backoff.
+    """OpenAI chat çağrısı için sarmalayıcı.
 
-    TPM rate-limit (429) sık görülür; tek deneyip pes etmek yerine
-    Retry-After / artan bekleme ile birkaç kez dener.
+    - 429 / 5xx → exponential backoff (Retry-After header'ına saygı).
+    - 'unsupported parameter' (gpt-5 / o-serisi) → ilgili kwarg'ı düşür
+      ve tekrar dene.
+    Ortak mantık `violation_pool._chat.safe_chat`'te.
     """
-    import time as _t
-    delay = 2.0
-    last_exc = None
-    for attempt in range(max_retries):
-        try:
-            return _client().chat.completions.create(
-                model=model, messages=messages, **kwargs
-            )
-        except Exception as e:
-            last_exc = e
-            msg = str(e)
-            status = getattr(e, "status_code", None)
-            is_rate = ("429" in msg or status == 429
-                       or "rate_limit" in msg.lower())
-            is_5xx = any(c in msg for c in ("500", "502", "503", "504"))
-            if not (is_rate or is_5xx):
-                raise            # geçici olmayan hata → hemen yükselt
-            # Retry-After header varsa ona uy
-            wait = delay
-            try:
-                ra = getattr(getattr(e, "response", None), "headers", {}) or {}
-                if "retry-after" in {k.lower() for k in ra.keys()}:
-                    wait = float(next(v for k, v in ra.items()
-                                      if k.lower() == "retry-after"))
-            except Exception:
-                pass
-            _t.sleep(min(wait, 30.0))
-            delay = min(delay * 2, 30.0)   # exponential, cap 30s
-    raise last_exc
+    from ._chat import safe_chat
+    return safe_chat(_client(), model=model, messages=messages,
+                     max_retries=max_retries, **kwargs)
 
 
 def _propose_edit(violation: dict, cat: list[dict], model: str,

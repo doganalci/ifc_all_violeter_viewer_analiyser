@@ -267,6 +267,11 @@ if not all_baselines:
     )
     st.stop()
 
+# Sayfa 21'den gelen jump: önceden seçilen paketi otomatik aç.
+_jump_pkg = st.session_state.pop("viewer_jump_pkg", None)
+if _jump_pkg:
+    st.session_state["mv_pkg"] = _jump_pkg
+
 
 def _pkg_of(b: dict) -> str:
     tag = b.get("dataset_tag")
@@ -322,11 +327,33 @@ st.caption(
 )
 
 # --- İhlalli seçici -----------------------------------------------------
-all_violateds = _apply_sort(
+_all_violateds_raw = _apply_sort(
     _all_violateds_under_ana(root, ana_entry["id"]), sort_key,
 )
+
+# LLM model filtresi: paketteki violated'ların hangi modelle üretildiğine
+# göre süz (gpt-4o vs gpt-5 vs synth karışıksa).
+_models_in_pkg = sorted({
+    (v.get("llm_model") or "?") for v in _all_violateds_raw
+})
+if len(_models_in_pkg) > 1:
+    sel_models = st.multiselect(
+        "🤖 LLM modeli filtresi (üretici)",
+        options=_models_in_pkg, default=_models_in_pkg,
+        help="Yalnızca seçili modellerle üretilmiş ihlalli IFC'ler "
+             "listelenir. Default: hepsi.",
+        key=f"mv_modelfilter::{ana_entry['id']}",
+    )
+    all_violateds = [v for v in _all_violateds_raw
+                     if (v.get("llm_model") or "?") in set(sel_models)]
+else:
+    all_violateds = _all_violateds_raw
+
 violated_entry: dict | None = None
-st.markdown(f"#### İhlalli ({len(all_violateds)} adet — ana'ya transitively bağlı)")
+st.markdown(
+    f"#### İhlalli ({len(all_violateds)}/{len(_all_violateds_raw)} adet "
+    "— ana'ya transitively bağlı)"
+)
 if all_violateds:
     v_key = f"mv_violated::{ana_entry['id']}"
     cur_v = max(0, min(st.session_state.get(v_key, 0), len(all_violateds) - 1))
@@ -345,6 +372,7 @@ if all_violateds:
             format_func=lambda i: (
                 f"[{i + 1}/{len(all_violateds)}] "
                 f"{all_violateds[i]['name']} · "
+                f"model={all_violateds[i].get('llm_model') or '?'} · "
                 f"{all_violateds[i]['id'][:8]}"),
             key=f"{v_key}_sel", label_visibility="collapsed",
         )
@@ -354,7 +382,10 @@ if all_violateds:
     vcols[3].metric("Sıra", f"{cur_v + 1}/{len(all_violateds)}")
     violated_entry = all_violateds[cur_v]
 else:
-    st.info("📭 Bu pakette ihlalli IFC yok.")
+    if _all_violateds_raw:
+        st.info("📭 Filtre sonrası eşleşme yok. Filtreyi gevşet.")
+    else:
+        st.info("📭 Bu pakette ihlalli IFC yok.")
 
 # --- Tahmin (model seçimi + inference) -----------------------------------
 st.markdown("#### 🤖 Tahmin")
@@ -410,6 +441,158 @@ if cached:
         f"✓ Son tahmin: **{cached.get('run')}** · eşik {cached.get('threshold')} "
         f"· {pred_info.get('n_predicted', 0)} ihlal tahmini"
     )
+
+# --- İhlal & Tahmin detay paneli -----------------------------------------
+# Görselleştirmeden önce: ihlalli IFC'de TAM olarak ne değiştiğini ve
+# modelin neyi tahmin ettiğini açıkça gör. Kapı/kolon karışıklığı,
+# "ihlalli bulamadı" sebebi vb. burada anlaşılır.
+st.markdown("#### 📋 Ne ihlal var, model ne tahmin etti?")
+dc1, dc2 = st.columns(2)
+
+
+def _fmt_value(v) -> str:
+    if v is None:
+        return "—"
+    if isinstance(v, float):
+        return f"{v:.4g}"
+    return str(v)
+
+
+with dc1:
+    with st.expander(
+        "🔴 İhlaller (uygulanan + decoy)",
+        expanded=False,
+    ):
+        if not violated_entry:
+            st.caption("Önce bir ihlalli IFC seç.")
+        else:
+            doc = labels_summary(violated_entry) or {}
+            labels = doc.get("labels", [])
+            applied = [l for l in labels
+                       if l.get("status") == "applied" and not l.get("is_decoy")]
+            decoys = [l for l in labels if l.get("is_decoy")]
+            skipped = [l for l in labels if l.get("status") == "skipped"]
+
+            st.caption(
+                f"**{len(applied)}** uygulanan · **{len(decoys)}** decoy · "
+                f"**{len(skipped)}** atlandı  ·  "
+                f"model: `{violated_entry.get('llm_model') or '?'}`"
+            )
+
+            if applied:
+                rows = []
+                for l in applied:
+                    rows.append({
+                        "Kategori": l.get("category") or "?",
+                        "Başlık": (l.get("title") or "")[:60],
+                        "Eleman": f"{l.get('ifc_type', '?')} "
+                                  f"({l.get('ifc_name') or '—'})",
+                        "Attribute": l.get("attribute") or l.get("action"),
+                        "Önce → Sonra": (
+                            f"{_fmt_value(l.get('value_before'))}  →  "
+                            f"{_fmt_value(l.get('value_after'))}"
+                        ),
+                        "GUID": (l.get("ifc_global_id") or "")[:10],
+                    })
+                st.dataframe(pd.DataFrame(rows), hide_index=True,
+                             use_container_width=True)
+                # Detaylı reason kutuları (kısa tabloya sığmayan açıklamalar)
+                for i, l in enumerate(applied, 1):
+                    rsn = l.get("reason")
+                    if rsn:
+                        st.markdown(
+                            f"**#{i} — {l.get('title', '?')}** · "
+                            f"_{l.get('category', '?')}_"
+                        )
+                        st.caption(rsn)
+            else:
+                st.warning(
+                    "Uygulanmış gerçek ihlal yok. Skip nedenleri için "
+                    "aşağıya bak."
+                )
+
+            if decoys:
+                st.markdown("**🟡 Decoy etiketleri** (IFC modifiye edilmedi)")
+                drows = [{
+                    "Eleman": f"{l.get('ifc_type', '?')} "
+                              f"({l.get('ifc_name') or '—'})",
+                    "GUID": (l.get("ifc_global_id") or "")[:10],
+                } for l in decoys]
+                st.dataframe(pd.DataFrame(drows), hide_index=True,
+                             use_container_width=True)
+
+            if skipped:
+                with st.expander(f"⏭️ Atlanan {len(skipped)} ihlal "
+                                 "(LLM uygulanabilir hedef bulamadı)"):
+                    for l in skipped[:20]:
+                        st.markdown(
+                            f"- **{l.get('title', '?')}** · "
+                            f"_{l.get('category', '?')}_"
+                        )
+                        rsn = l.get("reason") or "?"
+                        st.caption(rsn)
+
+
+with dc2:
+    with st.expander("🔮 Modelin tahmini (hangi node, neden)", expanded=False):
+        if not cached:
+            st.caption("Önce 'Tahmin Yap' butonuna bas.")
+        else:
+            info = cached.get("info") or {}
+            st.caption(
+                f"Run: `{cached.get('run')}` · eşik {cached.get('threshold')}"
+                f" · model bu IFC'deki "
+                f"**{info.get('n_predicted', len(predicted_guids))}** "
+                "node'u ihlal olarak işaretledi."
+            )
+
+            # Tahminleri ihlalli IFC'nin gerçek etiketleriyle karşılaştır
+            if violated_entry and violated_sample is not None:
+                doc = labels_summary(violated_entry) or {}
+                lbl_by_guid = {l.get("ifc_global_id"): l
+                               for l in doc.get("labels", [])
+                               if l.get("ifc_global_id")}
+                vio_truth = {gid for gid, y in violated_sample.y.items()
+                             if y == 1}
+
+                rows = []
+                for guid in sorted(predicted_guids):
+                    lab = lbl_by_guid.get(guid, {})
+                    is_truth = guid in vio_truth
+                    is_decoy = bool(lab.get("is_decoy"))
+                    if is_truth:
+                        verdict = "✅ TP (gerçek ihlal)"
+                    elif is_decoy:
+                        verdict = "🪤 Decoy'a yandı"
+                    else:
+                        verdict = "❌ FP (yanlış pozitif)"
+                    rows.append({
+                        "Verdict": verdict,
+                        "Eleman": lab.get("ifc_type") or "?",
+                        "Ad": lab.get("ifc_name") or "—",
+                        "Kategori": lab.get("category") or "—",
+                        "GUID": guid[:10],
+                    })
+                if rows:
+                    st.dataframe(pd.DataFrame(rows), hide_index=True,
+                                 use_container_width=True)
+                # Kaçırılan ihlaller (FN)
+                missed = sorted(vio_truth - set(predicted_guids))
+                if missed:
+                    st.markdown(f"**❌ Kaçırılan {len(missed)} gerçek ihlal (FN)**")
+                    mrows = []
+                    for guid in missed:
+                        lab = lbl_by_guid.get(guid, {})
+                        mrows.append({
+                            "Eleman": lab.get("ifc_type") or "?",
+                            "Ad": lab.get("ifc_name") or "—",
+                            "Kategori": lab.get("category") or "—",
+                            "Attribute": lab.get("attribute") or "—",
+                            "GUID": guid[:10],
+                        })
+                    st.dataframe(pd.DataFrame(mrows), hide_index=True,
+                                 use_container_width=True)
+
 
 # --- Etiket katmanları ---------------------------------------------------
 st.markdown("#### Etiket katmanları")

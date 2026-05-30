@@ -327,6 +327,13 @@ if st.button("🤖 RAG'dan ihlal üret + enjekte et",
         f"`{sel_tag}` paketini seç → ihlalliler col 2'de görünür."
     )
 
+    if res.get("ok", 0) > 0:
+        if st.button("🔍 Görüntüleyicide göster",
+                     type="primary", use_container_width=True,
+                     key="rag_jump_viewer"):
+            st.session_state["viewer_jump_pkg"] = sel_tag
+            st.switch_page("pages/15_Ifc_Goruntuleyici.py")
+
 
 # --- Kapanış --------------------------------------------------------------
 st.divider()
