@@ -39,6 +39,13 @@ CATEGORIES = [
     "Görsel/Kontrast", "Aydınlatma", "Manevra alanı", "Eşik/Kot farkı",
 ]
 
+# IFC'den doğrudan geometrik/mekânsal olarak doğrulanabilir kategoriler.
+# Diğerleri (Aydınlatma, Kontrast, Uyarı yüzeyi vb.) genelde IFC'de bulunmaz.
+DEFAULT_CATEGORIES = [
+    "Giriş", "Kapı/Koridor", "Rampa", "Merdiven",
+    "Tuvalet/Banyo", "Mutfak", "Manevra alanı", "Eşik/Kot farkı",
+]
+
 
 def _fmt_int(n) -> str:
     return f"{int(n):,}".replace(",", ".")
@@ -140,9 +147,11 @@ st.subheader("3. İhlal kategorileri (TS 9111 / TS ISO 21542)")
 selected_cats = st.multiselect(
     "Hangi kategorilerde ihlal üretilsin?",
     options=CATEGORIES,
-    default=CATEGORIES,    # default: hepsi
+    default=DEFAULT_CATEGORIES,
     help="LLM havuz üretirken bu kategorilerden ihlal cümleleri seçer. "
-         "Az seçim → odaklı dataset. Çok seçim → geniş dataset.",
+         "Default: IFC'den doğrudan ölçülebilir 8 kategori. "
+         "Aydınlatma / kontrast / uyarı yüzeyi gibi alanları üretmek "
+         "istiyorsan elle ekle.",
 )
 if not selected_cats:
     st.error("⚠️ En az 1 kategori seçilmelidir.")
