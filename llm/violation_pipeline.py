@@ -161,6 +161,19 @@ def run_rag_violation_pipeline(
                 model=model,
                 decoy_ratio=float(decoy_ratio),
                 fill_from_pool=True,
+                generation_params={
+                    "source": "rag_pipeline",
+                    "dataset_tag": dataset_tag,
+                    "collection": collection_name,
+                    "categories": list(categories) if categories else "all",
+                    "n_violations_per_ifc": int(n_violations_per_ifc),
+                    "decoy_ratio": float(decoy_ratio),
+                    "rag_k": int(rag_k),
+                    "pool_oversample": float(pool_oversample),
+                    "model": model,
+                    "rag_query": rag_query,
+                    "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                },
             )
 
             summary = inj.get("summary", {})

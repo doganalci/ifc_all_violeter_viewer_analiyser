@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import streamlit as st
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -138,7 +139,7 @@ def _load_model(cfg, in_dim: int, num_edge_types: int):
 def _run_inference(sample, run_path: Path, threshold: float):
     """İhlalli sample üzerinde GAT inference; (predicted_guids, info) döner."""
     from ml.train.config import TrainConfig
-    from ml.data.graph_loader import sample_to_data
+    from ml.data.pyg_dataset import sample_to_data
     import torch
 
     cfg_path = run_path / "config.json"
@@ -481,6 +482,36 @@ with dc1:
                 f"**{len(skipped)}** atlandı  ·  "
                 f"model: `{violated_entry.get('llm_model') or '?'}`"
             )
+
+            # Üretim bilgileri — hangi baseline'dan, hangi parametrelerle,
+            # ne zaman, kaçıncı sefer üretildi (re-injection izi).
+            gp = doc.get("generation_params") or {}
+            attempt = doc.get("attempt_no")
+            baseline_name = doc.get("baseline_name") or "?"
+            created_at = doc.get("created_at") or "?"
+            meta_line = (
+                f"📌 **Baseline:** `{baseline_name}` · "
+                f"**Sefer #{attempt}** · "
+                f"**Zaman:** {created_at}"
+            )
+            if gp:
+                cat_str = (
+                    ",".join(gp["categories"][:3])
+                    + (f"…+{len(gp['categories']) - 3}"
+                       if isinstance(gp.get("categories"), list)
+                       and len(gp["categories"]) > 3 else "")
+                    if isinstance(gp.get("categories"), list)
+                    else str(gp.get("categories", "?"))
+                )
+                meta_line += (
+                    f"  ·  **Kaynak:** {gp.get('source', '?')}  ·  "
+                    f"**Collection:** `{gp.get('collection', '?')}`  ·  "
+                    f"**n/IFC:** {gp.get('n_violations_per_ifc', '?')}  ·  "
+                    f"**decoy:** {gp.get('decoy_ratio', '?')}  ·  "
+                    f"**rag_k:** {gp.get('rag_k', '?')}  ·  "
+                    f"**kategoriler:** {cat_str}"
+                )
+            st.markdown(meta_line)
 
             if applied:
                 st.markdown(

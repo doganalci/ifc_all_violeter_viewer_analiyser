@@ -349,6 +349,7 @@ def inject_violations(
     decoy_seed: int | None = None,
     fill_from_pool: bool = True,
     max_replacement_attempts: int | None = None,
+    generation_params: dict | None = None,
 ) -> dict:
     """violations: havuzdan seçilmiş ihlal dict'leri.
     decoy_ratio: GERÇEKTEN uygulanan ihlal sayısının yüzdesi kadar SAHTE
@@ -543,14 +544,25 @@ def inject_violations(
         reasons = [l.get("reason", "?") for l in labels
                    if l.get("status") == "skipped"][:3]
         summary["skip_sample_reasons"] = reasons
+    # Bu baseline için kaçıncı re-injection (_violatedN'deki N).
+    # Aynı baseline'a tekrar enjekte ettiğimizde isimden + meta'dan
+    # hangi sefer olduğu anlaşılır.
+    try:
+        attempt_no = int(_stem.rsplit("_violated", 1)[1].split("_", 1)[0])
+    except Exception:
+        attempt_no = 1
+
     labels_doc = {
         "ifc_file": out_ifc.name,
         "baseline_id": baseline_id,
+        "baseline_name": base.get("name"),
         "violated_id": out_id,
+        "attempt_no": attempt_no,
         "pool_run_id": pool_run_id,
         "llm_model": model,
         "selection_filter": selection_filter or {},
         "fill_from_pool": fill_from_pool,
+        "generation_params": generation_params or {},
         "created_at": datetime.utcnow().isoformat(timespec="seconds"),
         "summary": summary,
         "labels": labels,
@@ -559,7 +571,10 @@ def inject_violations(
                        encoding="utf-8")
     out_meta.write_text(json.dumps({
         "ifc_id": out_id, "kind": "violated", "baseline_id": baseline_id,
+        "baseline_name": base.get("name"),
+        "attempt_no": attempt_no,
         "pool_run_id": pool_run_id, "llm_model": model,
+        "generation_params": generation_params or {},
         "summary": summary,
         "created_at": labels_doc["created_at"],
     }, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -579,11 +594,19 @@ def inject_violations(
     # dataset_tag'ı parent baseline'dan miras al (varsa) — eğitim/listeleme
     # sayfalarında violated IFC'ler parent paketle birlikte görünür.
     _parent_tag = base.get("dataset_tag") if isinstance(base, dict) else None
+    # İsmin sonuna attempt no koy: aynı baseline'a birden fazla enjekte
+    # edildiğinde DB listesinde de hangi sefer olduğu okunur.
+    _display_name = f"{base['name']}.violated#{attempt_no}"
     mid = storage.create_ifc_model(
         id=out_id,
-        kind="violated", name=base["name"] + ".violated", parent_id=baseline_id,
+        kind="violated", name=_display_name, parent_id=baseline_id,
         llm_model=model, prompt=None, pool_run_id=pool_run_id,
-        params={"summary": summary, "selection_filter": selection_filter or {}},
+        params={
+            "summary": summary,
+            "selection_filter": selection_filter or {},
+            "generation_params": generation_params or {},
+            "attempt_no": attempt_no,
+        },
         file_path=str(out_ifc), meta_path=str(out_meta), labels_path=str(out_lab),
         graph_path=graph_path, status=status, error=None,
         dataset_tag=_parent_tag,
