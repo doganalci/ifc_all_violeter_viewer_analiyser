@@ -87,8 +87,8 @@ except Exception as e:
 if not collections:
     st.warning(
         "📭 ChromaDB'de hiç collection yok. **Önce doküman ingest et:**\n\n"
-        "Legacy sayfa 99 (Codex LLM Havuzu) → doküman yükle → ingest et. "
-        "Sonra buraya dön."
+        "Sol menüden **📚 22 RAG Operations** → collection oluştur → PDF "
+        "yükle → ingest et. Sonra buraya dön."
     )
     st.stop()
 
@@ -114,7 +114,10 @@ with cc[1]:
         n_chunks = 0
 
 if n_chunks == 0:
-    st.warning(f"`{collection_name}` collection boş. Önce ingest edin.")
+    st.warning(
+        f"`{collection_name}` collection boş. **📚 22 RAG Operations** "
+        "sayfasından bu collection'a PDF ingest et."
+    )
 
 
 # --- 2. Baseline paketi ---------------------------------------------------
@@ -336,5 +339,5 @@ st.info(
     "→ is_violation=True`). Ground truth dürüstlüğü korunur — LLM ne "
     "önerirse önersin, etiket kurala bağlı.\n\n"
     "**Ön gereksinim:** ChromaDB'de TS 9111 / TS ISO 21542 dokümanı "
-    "ingest edilmiş olmalı (legacy/99_Codex_LLM_Havuzu)."
+    "ingest edilmiş olmalı (📚 Sayfa 22 — RAG Operations)."
 )

@@ -34,6 +34,17 @@ def collection_info(name: str) -> dict:
     return {"name": name, "count": col.count(), "metadata": col.metadata or {}}
 
 
+def delete_collection(name: str) -> None:
+    _chroma().delete_collection(name)
+
+
+def create_collection(name: str) -> dict:
+    col = _chroma().get_or_create_collection(
+        name, metadata={"embedding_model": settings.embedding_model},
+    )
+    return {"name": name, "count": col.count()}
+
+
 def _chunk(text: str, size: int = 1200, overlap: int = 150) -> list[str]:
     text = re.sub(r"[ \t]+", " ", text).strip()
     if not text:
