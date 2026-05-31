@@ -393,36 +393,53 @@ else:
     all_violateds = _all_violateds_raw
 
 violated_entry: dict | None = None
-st.markdown(
-    f"#### İhlalli ({len(all_violateds)}/{len(_all_violateds_raw)} adet "
-    "— ana'ya transitively bağlı)"
-)
-if all_violateds:
-    v_key = f"mv_violated::{ana_entry['id']}"
-    cur_v = max(0, min(st.session_state.get(v_key, 0), len(all_violateds) - 1))
-    vcols = st.columns([1, 1, 6, 1])
-    if vcols[0].button("◀", key=f"{v_key}_p", disabled=cur_v == 0):
-        st.session_state[v_key] = cur_v - 1
+v_key = (f"mv_violated::{ana_entry['id']}" if all_violateds else None)
+
+
+def _render_violated_nav(suffix: str) -> None:
+    """İhlalli için ◀/▶/dropdown navigasyon UI'ı.
+
+    State (`v_key`) paylaşılır — aynı sayfada birden fazla yere
+    konabilir (üst seçici + 3D başı). suffix ile widget key'leri
+    ayrıştırılır.
+    """
+    if not all_violateds:
+        return
+    cur = max(0, min(st.session_state.get(v_key, 0),
+                     len(all_violateds) - 1))
+    vc = st.columns([1, 1, 6, 1])
+    if vc[0].button("◀", key=f"{v_key}_p_{suffix}", disabled=cur == 0):
+        st.session_state[v_key] = cur - 1
         st.rerun()
-    if vcols[1].button("▶", key=f"{v_key}_n",
-                       disabled=cur_v >= len(all_violateds) - 1):
-        st.session_state[v_key] = cur_v + 1
+    if vc[1].button("▶", key=f"{v_key}_n_{suffix}",
+                    disabled=cur >= len(all_violateds) - 1):
+        st.session_state[v_key] = cur + 1
         st.rerun()
-    with vcols[2]:
+    with vc[2]:
         picked = st.selectbox(
             "İhlalli", options=list(range(len(all_violateds))),
-            index=cur_v,
+            index=cur,
             format_func=lambda i: (
                 f"[{i + 1}/{len(all_violateds)}] "
                 f"{all_violateds[i]['name']} · "
                 f"model={all_violateds[i].get('llm_model') or '?'} · "
                 f"{all_violateds[i]['id'][:8]}"),
-            key=f"{v_key}_sel", label_visibility="collapsed",
+            key=f"{v_key}_sel_{suffix}", label_visibility="collapsed",
         )
-        if picked != cur_v:
+        if picked != cur:
             st.session_state[v_key] = picked
             st.rerun()
-    vcols[3].metric("Sıra", f"{cur_v + 1}/{len(all_violateds)}")
+    vc[3].metric("Sıra", f"{cur + 1}/{len(all_violateds)}")
+
+
+st.markdown(
+    f"#### İhlalli ({len(all_violateds)}/{len(_all_violateds_raw)} adet "
+    "— ana'ya transitively bağlı)"
+)
+if all_violateds:
+    _render_violated_nav("top")
+    cur_v = max(0, min(st.session_state.get(v_key, 0),
+                       len(all_violateds) - 1))
     violated_entry = all_violateds[cur_v]
 else:
     if _all_violateds_raw:
@@ -1059,6 +1076,10 @@ if mxd is not None:
 else:
     # 3D row
     st.markdown("### 🧱 3D Görselleştirme")
+    # Sayfayı yukarı kaydırmadan ihlalli arasında geçmek için aynı nav
+    # burada da görünür (state paylaşımlı).
+    if all_violateds:
+        _render_violated_nav("3d")
     c1, c2, c3 = st.columns(3)
     _render_ifc(c1, _col_args["ana"]["title"], _col_args["ana"]["ifc_meshes"],
                 key="ana_ifc_grid", max_state="ana_3d",
