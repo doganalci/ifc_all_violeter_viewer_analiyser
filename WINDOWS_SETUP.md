@@ -189,3 +189,27 @@ Veya **NSSM** ile Windows Service olarak kayıt et (kalıcı).
 | `torch_geometric error` | torch'u önce kur, sonra PyG |
 | Mac'ten bağlanılamıyor | Windows Firewall'da port 8501 açık mı? |
 | Yavaş eğitim | GPU varsa cuda seç, yoksa hidden_dim'i düşür |
+
+## 11) Local LLM (opsiyonel — Sayfa 21 için ücretsiz inject)
+
+Sayfa 21'in "🏠 Local LLM" özelliğini kullanmak için Ollama + bir model.
+Tek tıkla kurulum:
+
+```powershell
+# Repo kökünden:
+.\scripts\install_local_llm.ps1
+```
+
+Script: Ollama yoksa winget ile kurar → servisi başlatır →
+`qwen2.5:7b-instruct` modelini çeker (~4.7 GB) → smoke test yapar.
+Idempotent (tekrar çalıştırmak güvenli).
+
+Farklı model için:
+```powershell
+.\scripts\install_local_llm.ps1 -Model llama3.1:8b
+```
+
+Sonra Streamlit'i yeniden başlat → Sayfa 21'de "🏠 Local LLM kullan"
+checkbox'ını işaretle.
+
+macOS/Linux karşılığı: `./scripts/install_local_llm.sh`.
