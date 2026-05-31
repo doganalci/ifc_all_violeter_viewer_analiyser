@@ -103,6 +103,38 @@ all_tags = _storage.list_dataset_tags()  # [{tag, baseline, violated, total}, ..
 if all_tags:
     st.caption("**📦 Dataset etiketleri** — Sentetik Üretim ile veya pipeline'ın "
                 "verdiği etiketlere göre paket seçimi. Çoklu seçilebilir.")
+
+    # Kayıtlı veri seti yükleyici (sayfa 23 ile entegrasyon)
+    try:
+        from services import datasets as _ds
+        _saved = _ds.list_datasets()
+    except Exception:
+        _saved = []
+    if _saved:
+        _saved_map = {d["slug"]: d for d in _saved}
+        _opts = ["— (manuel seç)"] + list(_saved_map.keys())
+        _pick = st.selectbox(
+            "📚 Kayıtlı veri seti (opsiyonel)",
+            options=_opts,
+            format_func=lambda s: (
+                "— (manuel seç)" if s.startswith("—")
+                else f"{_saved_map[s]['name']} · "
+                     f"{len(_saved_map[s].get('tags') or [])} paket"
+            ),
+            help="Sayfa 23'te oluşturulan kayıtlı veri setini seç → "
+                 "paketler aşağıdaki multiselect'e otomatik dolar.",
+        )
+        if _pick != "— (manuel seç)":
+            _ds_tags = _saved_map[_pick].get("tags") or []
+            # Mevcut DB'de olmayan tag'leri sessizce at
+            _ds_tags = [t for t in _ds_tags
+                        if t in {x["tag"] for x in all_tags}]
+            st.session_state["_chosen_tags_default"] = _ds_tags
+            st.caption(
+                f"✓ `{_pick}` yüklendi — {len(_ds_tags)} paket "
+                "multiselect'e doldu."
+            )
+
     _cols = ["tag", "baseline", "violated", "eğitilebilir", "total"]
     _cols = [c for c in _cols if c in pd.DataFrame(all_tags).columns]
     tags_df = pd.DataFrame(all_tags)[_cols]
@@ -112,11 +144,16 @@ if all_tags:
     with tag_cols[0]:
         st.dataframe(tags_df, hide_index=True, use_container_width=True)
     with tag_cols[1]:
+        _default_tags = st.session_state.get(
+            "_chosen_tags_default",
+            [t["tag"] for t in all_tags],
+        )
         chosen_tags = st.multiselect(
             "Dataset paket(ler)i",
             options=[t["tag"] for t in all_tags],
-            default=[t["tag"] for t in all_tags],
-            help="Hepsini seçili bırakırsan tüm verilerle eğitir.",
+            default=_default_tags,
+            help="Hepsini seçili bırakırsan tüm verilerle eğitir. "
+                 "'Kayıtlı veri seti' seçtiysen oradan otomatik dolar.",
         )
         if not chosen_tags:
             st.error("En az bir dataset seç.")
