@@ -537,9 +537,27 @@ if go:
             "epoch": summary.get("best_epoch"),
             "val_f1": summary.get("best_val_f1"),
         },
+        "metrics": {
+            split: {
+                key: float((summary.get(split) or {}).get(src, 0))
+                for key, src in (
+                    ("precision", "precision"),
+                    ("recall", "recall"),
+                    ("f1", "f1"),
+                    ("auc_roc", "auc_roc"),
+                    ("balanced_acc", "balanced_accuracy"),
+                    ("mcc", "mcc"),
+                    ("decoy_fpr", "decoy_fpr"),
+                )
+            }
+            for split in ("train", "val", "test")
+            if summary.get(split) is not None
+        },
+        # Eski 'test_metrics' alanı backwards-compat (sayfa 15 dropdown
+        # rozeti hâlâ onu okuyor).
         "test_metrics": {
-            k: float((summary.get("test") or {}).get(_src_k, 0))
-            for k, _src_k in (
+            k: float((summary.get("test") or {}).get(src, 0))
+            for k, src in (
                 ("precision", "precision"),
                 ("recall", "recall"),
                 ("f1", "f1"),
@@ -558,6 +576,7 @@ if go:
     st.success(f"✓ Eğitim bitti · {dt:.1f}s")
     test = summary.get("test")
     val = summary.get("val")
+    train_res = summary.get("train")
 
     def _m(d, key, default=0.0) -> float:
         if d is None:
@@ -567,17 +586,91 @@ if go:
         except Exception:
             return default
 
-    if test is not None:
-        rc = st.columns(5)
-        rc[0].metric("Test F1", f"{_m(test, 'f1'):.3f}")
-        rc[1].metric("Test AUC", f"{_m(test, 'auc_roc'):.3f}")
-        rc[2].metric("Test Precision", f"{_m(test, 'precision'):.3f}")
-        rc[3].metric("Test Recall", f"{_m(test, 'recall'):.3f}")
-        rc[4].metric("Best epoch",
-                     f"{summary.get('best_epoch', '?')}")
+    # En kritik bilgi: train/val/test ayrı ayrı. Aralarında uçurum varsa
+    # overfit; üçü de çok yüksekse leak şüphesi.
+    st.markdown("### 📊 Train / Val / Test metrikleri")
+    metric_keys = [
+        ("f1", "F1"),
+        ("precision", "Precision"),
+        ("recall", "Recall"),
+        ("auc_roc", "AUC"),
+        ("balanced_accuracy", "Bal. Acc"),
+        ("mcc", "MCC"),
+        ("decoy_fpr", "Decoy FPR"),
+    ]
+    rows = []
+    for split_name, split_d in (
+        ("Train", train_res), ("Val", val), ("Test", test),
+    ):
+        if split_d is None:
+            continue
+        rows.append({
+            "Split": split_name,
+            **{label: round(_m(split_d, k), 4) for k, label in metric_keys},
+        })
+    if rows:
+        st.dataframe(pd.DataFrame(rows), hide_index=True,
+                     use_container_width=True)
+
+    # Hızlı tanı: F1 farkına bakıp uyarı ver.
+    if train_res is not None and test is not None:
+        _tr_f1 = _m(train_res, "f1")
+        _ts_f1 = _m(test, "f1")
+        _gap = _tr_f1 - _ts_f1
+        if _tr_f1 > 0.95 and _ts_f1 > 0.85:
+            st.warning(
+                "⚠️ Train ve Test F1 ikisi de çok yüksek. **Data leakage "
+                "şüphesi**: 🎭 mask expander'ında 'IFC type one-hot mask' "
+                "ve 'Numeric features mask' aç → tekrar eğit. Mask'lerle "
+                "F1 0.5-0.7'ye düşerse o gerçek performans."
+            )
+        elif _gap > 0.15:
+            st.warning(
+                f"⚠️ Train F1 ({_tr_f1:.3f}) >> Test F1 ({_ts_f1:.3f}) — "
+                "**overfit**. dropout artır (0.5+), hidden_dim azalt "
+                "(64→32), weight_decay artır (5e-4→1e-3)."
+            )
+
+    # Confusion matrix'leri (varsa)
+    cms = []
+    for split_name, split_d in (
+        ("Train", train_res), ("Val", val), ("Test", test),
+    ):
+        if split_d is None:
+            continue
+        cm = split_d.get("confusion") if isinstance(split_d, dict) else None
+        if not cm:
+            continue
+        # cm formatı: {"tn":int, "fp":int, "fn":int, "tp":int}
+        cms.append((split_name, cm))
+    if cms:
+        st.markdown("### 🧮 Confusion matrix'ler")
+        cm_cols = st.columns(len(cms))
+        for col, (name, cm) in zip(cm_cols, cms):
+            with col:
+                st.caption(f"**{name}**")
+                tn = int(cm.get("tn", 0))
+                fp = int(cm.get("fp", 0))
+                fn = int(cm.get("fn", 0))
+                tp = int(cm.get("tp", 0))
+                df_cm = pd.DataFrame(
+                    [[tn, fp], [fn, tp]],
+                    index=["Gerçek 0", "Gerçek 1"],
+                    columns=["Tahmin 0", "Tahmin 1"],
+                )
+                st.dataframe(df_cm, use_container_width=True)
+                _support = tn + fp + fn + tp
+                _pos = tp + fn
+                st.caption(
+                    f"n={_support} · pozitif={_pos} "
+                    f"({_pos / max(_support, 1) * 100:.1f}%)"
+                )
+
+    # Run klasörü + sonraki adım
     st.caption(
-        f"📁 `{run_dir.name}` · {len(history)} epoch · "
-        f"sonraki adım: **Sayfa 15** → bu run'ı seç → 'Tahmin Yap'"
+        f"📁 `{run_dir.name}` · best epoch={summary.get('best_epoch', '?')}"
+        f" · {len(history)} epoch çalıştı · sonraki adım: **Sayfa 15** "
+        "→ bu run'ı seç → 'Tahmin Yap'"
     )
 
 
@@ -606,12 +699,18 @@ else:
                 s = json.loads(sum_p.read_text(encoding="utf-8"))
             except Exception:
                 pass
+        _mm = m.get("metrics") or {}
+        _tr = _mm.get("train") or {}
+        _va = _mm.get("val") or {}
+        _te = _mm.get("test") or (m.get("test_metrics") or {})
         rows.append({
             "Run": rd.name,
             "Dataset": (m.get("dataset") or {}).get("name") or "—",
             "Model": (m.get("model") or {}).get("type") or "?",
-            "Test F1": (m.get("test_metrics") or {}).get("f1"),
-            "Test AUC": (m.get("test_metrics") or {}).get("auc_roc"),
+            "Train F1": _tr.get("f1"),
+            "Val F1": _va.get("f1"),
+            "Test F1": _te.get("f1"),
+            "Test AUC": _te.get("auc_roc"),
             "Best ep": (m.get("best") or {}).get("epoch")
                        or s.get("best_epoch"),
             "Süre s": (m.get("duration_s") or "—"),
