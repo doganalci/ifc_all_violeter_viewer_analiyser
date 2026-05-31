@@ -182,19 +182,32 @@ with st.expander("⚙️ Detaylı ayarlar (default'lar eskisi gibi)",
                                         disabled=(model_type != "hetero_gat"),
                                         help="Sadece Hetero GAT'ta kullanılır.")
     with hc2:
-        epochs = st.number_input("epochs", 5, 500, 50, step=5)
-        lr = st.select_slider("learning rate",
-                              options=[1e-4, 3e-4, 5e-4, 1e-3, 3e-3,
-                                       5e-3, 1e-2, 3e-2],
-                              value=5e-3,
-                              format_func=lambda x: f"{x:.0e}")
-        weight_decay = st.select_slider("weight_decay",
-                                         options=[0.0, 1e-5, 1e-4, 5e-4,
-                                                  1e-3, 5e-3],
-                                         value=5e-4,
-                                         format_func=lambda x: f"{x:.0e}")
-        patience = st.number_input("early-stop patience", 0, 100, 10,
-                                    help="0 → erken durdurma kapalı")
+        epochs = st.number_input(
+            "epochs", 5, 1000, 150, step=5,
+            help="Maksimum epoch sayısı. Default 150 — yavaş öğrenip "
+                 "daha iyi yakınsasın.",
+        )
+        lr = st.select_slider(
+            "learning rate",
+            options=[1e-4, 3e-4, 5e-4, 1e-3, 2e-3, 3e-3,
+                     5e-3, 1e-2, 3e-2],
+            value=1e-3,
+            format_func=lambda x: f"{x:.0e}",
+            help="Düşük LR → yavaş ama stabil öğrenme. Erken val_F1 "
+                 "platosu görüyorsan 3e-4 veya 1e-4 dene.",
+        )
+        weight_decay = st.select_slider(
+            "weight_decay",
+            options=[0.0, 1e-5, 1e-4, 5e-4, 1e-3, 5e-3],
+            value=5e-4,
+            format_func=lambda x: f"{x:.0e}",
+        )
+        patience = st.number_input(
+            "early-stop patience", 0, 200, 30,
+            help="0 → erken durdurma kapalı. Default 30 — val_F1'in "
+                 "yavaş yavaş iyileşmesine vakit tanı. Çok hızlı "
+                 "duruyorsa 50-80'e çıkar.",
+        )
     with hc3:
         threshold = st.slider("classification threshold", 0.1, 0.9,
                                0.5, 0.05)
@@ -407,17 +420,26 @@ if go:
         log_slot.code("\n".join(log_buf[-20:]), language="text")
 
     def _on_epoch(ep: int, loss: float, res) -> None:
+        # res EvalResult dataclass'ı veya dict olabilir; ikisini de yakala.
+        def _val(k, default=0.0):
+            try:
+                if isinstance(res, dict):
+                    return float(res.get(k, default))
+                return float(getattr(res, k, default))
+            except Exception:
+                return default
+
         history.append({
             "epoch": ep,
             "loss": float(loss),
-            "f1": float(getattr(res, "f1", 0)),
-            "auc_roc": float(getattr(res, "auc_roc", 0)),
-            "precision": float(getattr(res, "precision", 0)),
-            "recall": float(getattr(res, "recall", 0)),
+            "f1": _val("f1"),
+            "auc_roc": _val("auc_roc"),
+            "precision": _val("precision"),
+            "recall": _val("recall"),
         })
         bar.progress(min(1.0, ep / max(epochs, 1)),
                      text=f"epoch {ep}/{epochs} · loss={loss:.4f} · "
-                          f"val F1={getattr(res, 'f1', 0):.3f}")
+                          f"val F1={_val('f1'):.3f}")
         df = pd.DataFrame(history).set_index("epoch")
         with metric_slot.container():
             cc1, cc2 = st.columns(2)
@@ -507,9 +529,15 @@ if go:
             "val_f1": summary.get("best_val_f1"),
         },
         "test_metrics": {
-            k: float(getattr(summary.get("test"), k, 0))
-            for k in ("precision", "recall", "f1", "auc_roc",
-                      "balanced_acc", "mcc")
+            k: float((summary.get("test") or {}).get(_src_k, 0))
+            for k, _src_k in (
+                ("precision", "precision"),
+                ("recall", "recall"),
+                ("f1", "f1"),
+                ("auc_roc", "auc_roc"),
+                ("balanced_acc", "balanced_accuracy"),
+                ("mcc", "mcc"),
+            )
             if summary.get("test") is not None
         },
     }
@@ -521,14 +549,21 @@ if go:
     st.success(f"✓ Eğitim bitti · {dt:.1f}s")
     test = summary.get("test")
     val = summary.get("val")
+
+    def _m(d, key, default=0.0) -> float:
+        if d is None:
+            return default
+        try:
+            return float(d[key])
+        except Exception:
+            return default
+
     if test is not None:
         rc = st.columns(5)
-        rc[0].metric("Test F1", f"{getattr(test, 'f1', 0):.3f}")
-        rc[1].metric("Test AUC", f"{getattr(test, 'auc_roc', 0):.3f}")
-        rc[2].metric("Test Precision",
-                     f"{getattr(test, 'precision', 0):.3f}")
-        rc[3].metric("Test Recall",
-                     f"{getattr(test, 'recall', 0):.3f}")
+        rc[0].metric("Test F1", f"{_m(test, 'f1'):.3f}")
+        rc[1].metric("Test AUC", f"{_m(test, 'auc_roc'):.3f}")
+        rc[2].metric("Test Precision", f"{_m(test, 'precision'):.3f}")
+        rc[3].metric("Test Recall", f"{_m(test, 'recall'):.3f}")
         rc[4].metric("Best epoch",
                      f"{summary.get('best_epoch', '?')}")
     st.caption(
