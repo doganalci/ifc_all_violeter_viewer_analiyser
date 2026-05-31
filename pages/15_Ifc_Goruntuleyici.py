@@ -958,26 +958,30 @@ _col_args = {
 
 def _render_col_panel(c: dict, *, panel_key: str, mode: str) -> None:
     """Tek bir sütunun (col_name) ilgili modda 3D + graph render."""
+    # _render_ifc/_render_graph içeride `with col:` kullanıyor; streamlit
+    # modülü context manager protokolünü desteklemediği için st.container()
+    # ile sarmalıyoruz (DeltaGenerator dönüyor, with çalışıyor).
+    container = st.container()
     if mode == "both":
-        _render_ifc(st, c["title"], c["ifc_meshes"],
+        _render_ifc(container, c["title"], c["ifc_meshes"],
                     vio=c["vio"], decoy=c["decoy"], normal=c["normal"],
                     pred=c["pred"], height=PANEL_H_3D_BOTH,
                     key=f"{panel_key}_3d", max_state=f"{panel_key}_3d",
                     fallback_ifc_path=c.get("ifc_path"))
-        _render_graph(st, c["title"], c["sample"],
+        _render_graph(container, c["title"], c["sample"],
                       vio=c["vio"], decoy=c["decoy"], normal=c["normal"],
                       pred=c["pred"], height=PANEL_H_GR_BOTH,
                       key=f"{panel_key}_g", max_state=f"{panel_key}_graph",
                       ifc_path=c.get("ifc_path"),
                       graph_path=c.get("graph_path"))
     elif mode == "3d":
-        _render_ifc(st, c["title"], c["ifc_meshes"],
+        _render_ifc(container, c["title"], c["ifc_meshes"],
                     vio=c["vio"], decoy=c["decoy"], normal=c["normal"],
                     pred=c["pred"], height=PANEL_H_3D_FULL,
                     key=f"{panel_key}_3d_full",
                     fallback_ifc_path=c.get("ifc_path"))
     elif mode == "graph":
-        _render_graph(st, c["title"], c["sample"],
+        _render_graph(container, c["title"], c["sample"],
                       vio=c["vio"], decoy=c["decoy"], normal=c["normal"],
                       pred=c["pred"], height=PANEL_H_GR_FULL,
                       key=f"{panel_key}_g_full",
