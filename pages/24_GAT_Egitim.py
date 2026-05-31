@@ -240,6 +240,34 @@ run_name = st.text_input(
 
 # --- 5. Eğit -------------------------------------------------------------
 st.subheader("5. Eğit")
+
+# Cache yönetimi — yeni paket ekledikten sonra cache invalidate olmazsa
+# 'Filtre hiçbir IFC eşleştirmedi' hatası gelir. Burada görülür ve elle
+# silinebilir.
+_cache_dir = Path("./data/cache").expanduser().resolve()
+with st.expander(f"🗑 Cache yönetimi ({_cache_dir})"):
+    if _cache_dir.exists():
+        _cf = sorted(_cache_dir.glob("**/*.pt"))
+        if _cf:
+            import datetime as _dt
+            for cf in _cf:
+                _mt = _dt.datetime.fromtimestamp(
+                    cf.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                _sz = cf.stat().st_size / 1024 / 1024
+                st.caption(f"📦 `{cf.name}` · {_sz:.1f} MB · {_mt}")
+            if st.button("🗑 Tüm cache'i sil",
+                         help="Yeni paket ekledikten sonra ŞART. Cache "
+                              "otomatik yeniden işlenecek (~30 sn-2 dk).",
+                         key="clear_cache_top"):
+                import shutil as _sh
+                _sh.rmtree(_cache_dir, ignore_errors=True)
+                st.success("Cache silindi. Şimdi 'Eğitimi başlat'a bas.")
+                st.rerun()
+        else:
+            st.caption("(cache boş)")
+    else:
+        st.caption("(cache klasörü yok — ilk eğitimde oluşur)")
+
 go = st.button("🚀 Eğitimi başlat",
                type="primary", use_container_width=True,
                disabled=(test_pct < 5 or not chosen_tags))
@@ -331,6 +359,23 @@ if go:
                 on_log=_on_log,
                 filter_ifc_ids=allowed_ids,
             )
+    except RuntimeError as e:
+        _msg = str(e)
+        if "Filtre hiçbir IFC eşleştirmedi" in _msg or "CACHE BAYAT" in _msg:
+            st.error(
+                "🔴 Cache bayat — yeni paketin IFC'leri eski cache'te yok. "
+                "Aşağıdaki butonla cache'i sil, sonra tekrar başlat."
+            )
+            if st.button("🗑 Cache'i sil ve hazırla",
+                         type="primary",
+                         key="clear_cache_inline"):
+                import shutil as _sh
+                _sh.rmtree(_cache_dir, ignore_errors=True)
+                st.success("Cache silindi. 'Eğitimi başlat'a tekrar bas.")
+                st.rerun()
+        else:
+            st.exception(e)
+        st.stop()
     except Exception as e:
         st.exception(e)
         st.stop()
