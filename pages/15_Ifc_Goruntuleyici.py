@@ -986,14 +986,33 @@ def _render_col_panel(c: dict, *, panel_key: str, mode: str) -> None:
 
 
 if mxd is not None:
-    col_name, mode = mxd.split("_", 1)
+    # Stale veya geçersiz state'ten kurtul (eski oturumdan, refactor sonrası
+    # vs.). Geçersizse sessizce grid'e dön — exception yerine recovery.
+    try:
+        col_name, mode = mxd.split("_", 1)
+    except ValueError:
+        col_name, mode = None, None
+    if (col_name not in _col_args
+            or mode not in ("both", "3d", "graph")):
+        st.warning(
+            f"⚠️ Geçersiz büyütme durumu (`{mxd}`). Grid'e dönülüyor."
+        )
+        st.session_state["mv_maximized"] = None
+        st.rerun()
     panel_title = {"ana": "🏛️ Ana baseline",
                    "vio": "💥 İhlalli",
                    "pred": "🤖 Tahmin"}.get(col_name, col_name)
     mode_label = {"both": "3D + Graph", "3d": "sadece 3D",
                   "graph": "sadece Graph"}.get(mode, mode)
     st.markdown(f"### {panel_title} ({mode_label})")
-    _render_col_panel(_col_args[col_name], panel_key=col_name, mode=mode)
+    try:
+        _render_col_panel(_col_args[col_name], panel_key=col_name, mode=mode)
+    except Exception as e:
+        st.error(f"🔴 Panel render hatası: `{e.__class__.__name__}: {e}`")
+        st.exception(e)
+        if st.button("🔲 Grid'e dön (kurtar)", type="primary"):
+            st.session_state["mv_maximized"] = None
+            st.rerun()
 else:
     # 3D row
     st.markdown("### 🧱 3D Görselleştirme")
