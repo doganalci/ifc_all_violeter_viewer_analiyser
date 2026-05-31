@@ -228,13 +228,17 @@ with st.expander("🎭 Etiket / özellik mask'leri (opsiyonel)",
                  "ihlali için 'IfcColumn = ihlal' leak'ini engeller.",
         )
 
-# Run adı (kullanıcı override edebilir)
-default_name = f"ui_{time.strftime('%Y%m%d_%H%M%S')}"
+# Run adı — default formatta dataset + model + timestamp.
+# Kullanıcı istediği gibi değiştirebilir.
+_ts = time.strftime("%Y%m%d_%H%M%S")
+_data_token = (chosen_dataset_slug or "manual")
+default_name = f"{model_type}_{_data_token}_{_ts}"
 run_name = st.text_input(
     "Run adı (run klasör adı)",
     value=default_name,
-    help="`runs/<bu_ad>/` klasörü açılır. Eski adla aynı verirsen "
-         "sonuçlar üzerine yazılır.",
+    help="Default: `<model>_<dataset>_<timestamp>`. Sayfa 15 viewer "
+         "dropdown'ında bu ad görünür. Eski adla aynı verirsen önceki "
+         "run'ın üzerine yazılır.",
 )
 
 
