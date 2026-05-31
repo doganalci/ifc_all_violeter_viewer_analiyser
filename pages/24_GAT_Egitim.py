@@ -456,8 +456,27 @@ if go:
                           f"val F1={_val('f1'):.3f} · "
                           f"acc={_val('accuracy'):.3f}")
         df = pd.DataFrame(history).set_index("epoch")
-        # Her metrik için ayrı chart — üst üste binmesin, eğri net görünsün.
         with metric_slot.container():
+            # En üst — birbirine yakın metrik grupları tek chart'ta.
+            top1, top2 = st.columns(2)
+            _doğr_cols = [c for c in ("f1", "accuracy", "balanced_accuracy")
+                           if c in df.columns]
+            if _doğr_cols:
+                top1.caption(
+                    "Doğruluk genel — F1 · Accuracy · Balanced Acc"
+                )
+                top1.line_chart(df[_doğr_cols], height=240)
+            _kalite_cols = [c for c in ("precision", "recall",
+                                          "auc_roc", "auc_pr")
+                             if c in df.columns]
+            if _kalite_cols:
+                top2.caption(
+                    "Sınıflandırma kalitesi — Precision · Recall · "
+                    "AUC ROC · AUC PR"
+                )
+                top2.line_chart(df[_kalite_cols], height=240)
+
+            # Her metrik için ayrı chart — eğri net görünsün.
             _grid = [
                 ("Loss (train)", ["loss"]),
                 ("F1 (val)", ["f1"]),

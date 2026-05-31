@@ -295,13 +295,31 @@ if detail:
         st.markdown("**🔀 Split**")
         st.json(meta.get("split") or {}, expanded=True)
 
-    # History — her metrik ayrı küçük chart (eğri net görünsün)
+    # History — özet (2 birleşik) + detay (10 ayrı)
     history = summary.get("history") or []
     if history:
         st.markdown("**📈 Eğitim eğrileri (epoch bazında)**")
         hdf = pd.DataFrame(history)
         if "epoch" in hdf.columns:
             hdf = hdf.set_index("epoch")
+
+        # Üst birleşik — birbirine yakın metrikleri tek chart'ta
+        top1, top2 = st.columns(2)
+        _doğr_cols = [c for c in ("f1", "accuracy", "balanced_accuracy")
+                       if c in hdf.columns]
+        if _doğr_cols:
+            top1.caption("Doğruluk genel — F1 · Accuracy · Balanced Acc")
+            top1.line_chart(hdf[_doğr_cols], height=240)
+        _kalite_cols = [c for c in ("precision", "recall",
+                                      "auc_roc", "auc_pr")
+                         if c in hdf.columns]
+        if _kalite_cols:
+            top2.caption(
+                "Sınıflandırma kalitesi — Precision · Recall · "
+                "AUC ROC · AUC PR"
+            )
+            top2.line_chart(hdf[_kalite_cols], height=240)
+
         _grid = [
             ("Loss (train)", ["loss"]),
             ("F1 (val)", ["f1"]),
