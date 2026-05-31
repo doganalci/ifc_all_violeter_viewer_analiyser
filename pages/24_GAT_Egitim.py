@@ -22,6 +22,7 @@ from ml.app.state import get_dataset_root
 from ml.train.config import TrainConfig
 from ml.train.loop import run_training
 from services import datasets as ds
+from services.metric_colors import METRIC_COLORS, metric_colors, metric_label
 from violation_pool import storage
 
 
@@ -457,26 +458,39 @@ if go:
                           f"acc={_val('accuracy'):.3f}")
         df = pd.DataFrame(history).set_index("epoch")
         with metric_slot.container():
-            # En üst — birbirine yakın metrik grupları tek chart'ta.
+            # En üst — birbirine yakın metrik grupları tek chart'ta,
+            # sabit renkler (alttaki ayrı chart'larla aynı palet).
+            def _legend_md(cols: list[str]) -> str:
+                bits = []
+                for c in cols:
+                    col = METRIC_COLORS.get(c, "#94a3b8")
+                    bits.append(
+                        f"<span style='display:inline-block;width:10px;"
+                        f"height:10px;background:{col};margin-right:4px;"
+                        f"border-radius:2px;'></span>{metric_label(c)}"
+                    )
+                return "&nbsp;&nbsp;".join(bits)
+
             top1, top2 = st.columns(2)
             _doğr_cols = [c for c in ("f1", "accuracy", "balanced_accuracy")
                            if c in df.columns]
             if _doğr_cols:
-                top1.caption(
-                    "Doğruluk genel — F1 · Accuracy · Balanced Acc"
-                )
-                top1.line_chart(df[_doğr_cols], height=240)
+                top1.caption("Doğruluk genel")
+                top1.line_chart(df[_doğr_cols], height=240,
+                                color=metric_colors(_doğr_cols))
+                top1.markdown(_legend_md(_doğr_cols),
+                              unsafe_allow_html=True)
             _kalite_cols = [c for c in ("precision", "recall",
                                           "auc_roc", "auc_pr")
                              if c in df.columns]
             if _kalite_cols:
-                top2.caption(
-                    "Sınıflandırma kalitesi — Precision · Recall · "
-                    "AUC ROC · AUC PR"
-                )
-                top2.line_chart(df[_kalite_cols], height=240)
+                top2.caption("Sınıflandırma kalitesi")
+                top2.line_chart(df[_kalite_cols], height=240,
+                                color=metric_colors(_kalite_cols))
+                top2.markdown(_legend_md(_kalite_cols),
+                              unsafe_allow_html=True)
 
-            # Her metrik için ayrı chart — eğri net görünsün.
+            # Her metrik için ayrı chart — üstle aynı renkler.
             _grid = [
                 ("Loss (train)", ["loss"]),
                 ("F1 (val)", ["f1"]),
@@ -496,7 +510,8 @@ if go:
                     if not all(c in df.columns for c in cols):
                         continue
                     cc[j].caption(title)
-                    cc[j].line_chart(df[cols], height=160)
+                    cc[j].line_chart(df[cols], height=160,
+                                     color=metric_colors(cols))
 
     def _on_log(msg: str) -> None:
         for line in str(msg).rstrip().split("\n"):

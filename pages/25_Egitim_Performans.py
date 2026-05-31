@@ -23,6 +23,8 @@ import streamlit as st
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
+from services.metric_colors import METRIC_COLORS, metric_colors, metric_label
+
 
 st.set_page_config(page_title="Eğitim Performans",
                    layout="wide", page_icon="📈")
@@ -303,22 +305,35 @@ if detail:
         if "epoch" in hdf.columns:
             hdf = hdf.set_index("epoch")
 
-        # Üst birleşik — birbirine yakın metrikleri tek chart'ta
+        # Üst birleşik — birbirine yakın metrikleri tek chart'ta,
+        # sabit renkler (alttaki ayrı chart'larla aynı palet).
+        def _legend_md(cols: list[str]) -> str:
+            bits = []
+            for c in cols:
+                col = METRIC_COLORS.get(c, "#94a3b8")
+                bits.append(
+                    f"<span style='display:inline-block;width:10px;"
+                    f"height:10px;background:{col};margin-right:4px;"
+                    f"border-radius:2px;'></span>{metric_label(c)}"
+                )
+            return "&nbsp;&nbsp;".join(bits)
+
         top1, top2 = st.columns(2)
         _doğr_cols = [c for c in ("f1", "accuracy", "balanced_accuracy")
                        if c in hdf.columns]
         if _doğr_cols:
-            top1.caption("Doğruluk genel — F1 · Accuracy · Balanced Acc")
-            top1.line_chart(hdf[_doğr_cols], height=240)
+            top1.caption("Doğruluk genel")
+            top1.line_chart(hdf[_doğr_cols], height=240,
+                            color=metric_colors(_doğr_cols))
+            top1.markdown(_legend_md(_doğr_cols), unsafe_allow_html=True)
         _kalite_cols = [c for c in ("precision", "recall",
                                       "auc_roc", "auc_pr")
                          if c in hdf.columns]
         if _kalite_cols:
-            top2.caption(
-                "Sınıflandırma kalitesi — Precision · Recall · "
-                "AUC ROC · AUC PR"
-            )
-            top2.line_chart(hdf[_kalite_cols], height=240)
+            top2.caption("Sınıflandırma kalitesi")
+            top2.line_chart(hdf[_kalite_cols], height=240,
+                            color=metric_colors(_kalite_cols))
+            top2.markdown(_legend_md(_kalite_cols), unsafe_allow_html=True)
 
         _grid = [
             ("Loss (train)", ["loss"]),
@@ -339,7 +354,8 @@ if detail:
                     cols[j].caption(f"{title}  _(history'de yok — eski run)_")
                     continue
                 cols[j].caption(title)
-                cols[j].line_chart(hdf[ck], height=160)
+                cols[j].line_chart(hdf[ck], height=160,
+                                   color=metric_colors(ck))
 
     # Dataset paket detayı
     _ds = meta.get("dataset") or {}
