@@ -242,18 +242,27 @@ with st.expander("🎭 Etiket / özellik mask'leri (opsiyonel)",
                  "ihlali için 'IfcColumn = ihlal' leak'ini engeller.",
         )
 
-# Run adı — default formatta dataset + model + timestamp.
-# Kullanıcı istediği gibi değiştirebilir.
-_ts = time.strftime("%Y%m%d_%H%M%S")
+# Run adı — default `<model>_<dataset>_<timestamp>`. Default sadece
+# session'a 1 kez yazılır; kullanıcı yazdıktan sonra rerun'larda korunur.
+# Dataset veya model değişirse default yenilenir (kullanıcının elle
+# yazdığı son değer üzerine yazılır — istenen davranış).
 _data_token = (chosen_dataset_slug or "manual")
-default_name = f"{model_type}_{_data_token}_{_ts}"
+_rn_sig = f"{model_type}::{_data_token}"
+if st.session_state.get("_rn_sig") != _rn_sig:
+    st.session_state["run_name_input"] = (
+        f"{model_type}_{_data_token}_{time.strftime('%Y%m%d_%H%M%S')}"
+    )
+    st.session_state["_rn_sig"] = _rn_sig
+
 run_name = st.text_input(
     "Run adı (run klasör adı)",
-    value=default_name,
+    key="run_name_input",
     help="Default: `<model>_<dataset>_<timestamp>`. Sayfa 15 viewer "
-         "dropdown'ında bu ad görünür. Eski adla aynı verirsen önceki "
-         "run'ın üzerine yazılır.",
+         "dropdown'ında bu ad görünür. İstediğin gibi değiştirebilirsin; "
+         "dataset veya model değiştirirsen default yeniden oluşturulur. "
+         "Eski adla aynı verirsen önceki run'ın üzerine yazılır.",
 )
+default_name = st.session_state["run_name_input"]
 
 
 # --- 5. Eğit -------------------------------------------------------------
