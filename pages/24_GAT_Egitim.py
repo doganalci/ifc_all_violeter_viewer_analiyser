@@ -245,6 +245,68 @@ run_name = st.text_input(
 # --- 5. Eğit -------------------------------------------------------------
 st.subheader("5. Eğit")
 
+
+def _purge_cache(cache_dir: Path) -> tuple[bool, str]:
+    """Cache klasörünü agresif sil ve doğrula.
+
+    Windows'ta `shutil.rmtree(ignore_errors=True)` dosya kilitliyse
+    sessizce skip eder ve cache hâlâ orada kalır → eğitim eski IFC
+    listesini okur. Burada:
+    1) Streamlit cache referanslarını temizle (varsa).
+    2) gc.collect() ile torch tensor reference'larını serbest bırak.
+    3) shutil.rmtree dene.
+    4) Hâlâ varsa dosya bazında unlink dene.
+    5) Sonuçu doğrula; başarısızsa kullanıcıya net mesaj ver.
+    """
+    import gc
+    import shutil
+
+    if not cache_dir.exists():
+        return True, "Cache zaten yok."
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    try:
+        st.cache_resource.clear()
+    except Exception:
+        pass
+    gc.collect()
+
+    try:
+        shutil.rmtree(cache_dir)
+    except Exception:
+        pass
+
+    if cache_dir.exists():
+        # Dosya bazında dene (rmtree Windows kilidinde takılmış olabilir).
+        for p in sorted(cache_dir.rglob("*"), reverse=True):
+            try:
+                if p.is_file() or p.is_symlink():
+                    p.unlink()
+                elif p.is_dir():
+                    p.rmdir()
+            except Exception:
+                pass
+        try:
+            cache_dir.rmdir()
+        except Exception:
+            pass
+
+    # Son kontrol
+    if cache_dir.exists():
+        remaining = list(cache_dir.rglob("*.pt"))
+        if remaining:
+            return False, (
+                f"⚠️ Cache silinemedi (Windows dosya kilidi olabilir). "
+                f"Kalan {len(remaining)} `.pt` dosyası var. **Streamlit'i "
+                f"komple kapat**, sonra şu klasörü File Explorer'dan elle sil:"
+                f"\n\n`{cache_dir}`\n\nSonra Streamlit'i tekrar başlat."
+            )
+    return True, "✓ Cache silindi (yeniden başlatma gerekmez)."
+
+
 # Cache yönetimi — yeni paket ekledikten sonra cache invalidate olmazsa
 # 'Filtre hiçbir IFC eşleştirmedi' hatası gelir. Burada görülür ve elle
 # silinebilir.
@@ -263,10 +325,10 @@ with st.expander(f"🗑 Cache yönetimi ({_cache_dir})"):
                          help="Yeni paket ekledikten sonra ŞART. Cache "
                               "otomatik yeniden işlenecek (~30 sn-2 dk).",
                          key="clear_cache_top"):
-                import shutil as _sh
-                _sh.rmtree(_cache_dir, ignore_errors=True)
-                st.success("Cache silindi. Şimdi 'Eğitimi başlat'a bas.")
-                st.rerun()
+                ok, msg = _purge_cache(_cache_dir)
+                (st.success if ok else st.error)(msg)
+                if ok:
+                    st.rerun()
         else:
             st.caption("(cache boş)")
     else:
@@ -373,10 +435,10 @@ if go:
             if st.button("🗑 Cache'i sil ve hazırla",
                          type="primary",
                          key="clear_cache_inline"):
-                import shutil as _sh
-                _sh.rmtree(_cache_dir, ignore_errors=True)
-                st.success("Cache silindi. 'Eğitimi başlat'a tekrar bas.")
-                st.rerun()
+                ok, msg = _purge_cache(_cache_dir)
+                (st.success if ok else st.error)(msg)
+                if ok:
+                    st.rerun()
         else:
             st.exception(e)
         st.stop()
