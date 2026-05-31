@@ -105,7 +105,9 @@ Sadece JSON döndür."""
 
 
 def _client() -> OpenAI:
-    return OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
+    # Local LLM override aktifse oraya gider; aksi halde OpenAI.
+    from ._chat import chat_client
+    return chat_client()
 
 
 _INTERESTING = ("IfcDoor", "IfcWindow", "IfcWall", "IfcWallStandardCase",

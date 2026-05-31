@@ -8,13 +8,14 @@ from typing import Iterable
 from openai import OpenAI
 
 from . import storage
-from ._chat import safe_chat
+from ._chat import chat_client, safe_chat
 from .config import settings
 from .prompts import NAIVE_PROMPT, OPTIMIZED_PROMPT, build_user_message
 
 
 def _client() -> OpenAI:
-    return OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
+    # Local LLM override aktifse oraya gider; aksi halde OpenAI.
+    return chat_client()
 
 
 def _extract_json(text: str) -> dict:

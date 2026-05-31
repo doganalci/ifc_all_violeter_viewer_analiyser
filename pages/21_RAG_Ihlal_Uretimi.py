@@ -210,26 +210,71 @@ expected_violations = int(n_per_ifc) * expected_violated_ifcs
 
 # --- 5. Model -------------------------------------------------------------
 st.subheader("5. LLM modeli")
+
+# 5a. Local LLM toggle (Ollama / vLLM / LM Studio / herhangi OpenAI-uyumlu)
+with st.expander("🏠 Local LLM kullan (Ollama / vLLM / LM Studio)"):
+    st.caption(
+        "OpenAI yerine yerel/uzak bir OpenAI-uyumlu sunucuya yönlendir. "
+        "**Sadece chat çağrıları** (RAG havuz + inject + uyumlu kolon) "
+        "lokale gider; **embedding** (RAG retrieve) hala OpenAI'da kalır."
+    )
+    use_local = st.checkbox("🏠 Local LLM aktif", value=False,
+                            key="rag_use_local")
+    lc1, lc2 = st.columns([2, 2])
+    with lc1:
+        llm_base_url = st.text_input(
+            "Endpoint URL",
+            value="http://localhost:11434/v1",
+            disabled=not use_local,
+            help="Ollama: http://localhost:11434/v1  ·  "
+                 "vLLM: http://localhost:8000/v1  ·  "
+                 "LM Studio: http://localhost:1234/v1",
+        )
+    with lc2:
+        local_model = st.text_input(
+            "Model adı (yerel)",
+            value="qwen2.5:14b-instruct",
+            disabled=not use_local,
+            help="Ollama: 'ollama list' çıktısındaki ad. JSON çıktı + "
+                 "araç-kullanım iyi olan modeller önerilir: qwen2.5:14b, "
+                 "llama3.1:8b, mistral-small.",
+        )
+    llm_api_key = "local"
+    if use_local:
+        st.success(
+            f"🏠 Aktif: `{llm_base_url}` · model `{local_model}` · "
+            "maliyet $0"
+        )
+
 mc = st.columns([2, 1, 1])
 with mc[0]:
-    _opts = known_models() + ["✏️ Özel (elle yaz)"]
-    _default_idx = _opts.index("gpt-4o") if "gpt-4o" in _opts else 0
-    _pick = st.selectbox(
-        "🤖 Model", options=_opts, index=_default_idx,
-        help="Hem RAG havuz üretimi hem IFC enjeksiyonu (her ihlal için "
-             "_propose_edit) bu modeli kullanır.",
-    )
-    if _pick == "✏️ Özel (elle yaz)":
-        model = st.text_input("Model", value="gpt-4o", key="rag_custom_model")
+    if use_local:
+        st.info(f"Local model: **`{local_model}`** (yukarıdan değiştir)")
+        model = local_model
     else:
-        model = _pick
+        _opts = known_models() + ["✏️ Özel (elle yaz)"]
+        _default_idx = _opts.index("gpt-4o") if "gpt-4o" in _opts else 0
+        _pick = st.selectbox(
+            "🤖 Model", options=_opts, index=_default_idx,
+            help="Hem RAG havuz üretimi hem IFC enjeksiyonu (her ihlal için "
+                 "_propose_edit) bu modeli kullanır.",
+        )
+        if _pick == "✏️ Özel (elle yaz)":
+            model = st.text_input("Model", value="gpt-4o", key="rag_custom_model")
+        else:
+            model = _pick
 with mc[1]:
     # Tahmini maliyet: 1 RAG çağrı + N inject çağrı + M compliant çağrı
     expected_compliant = int(round(expected_violations * compliant_ratio))
     n_inject_calls = expected_violations + expected_compliant
-    rag_call_cost = estimate_cost(model, 3000, 5000)["total_usd"]
-    inject_call_cost = estimate_cost(model, 2000, 500)["total_usd"]
-    total_est = rag_call_cost + n_inject_calls * inject_call_cost
+    if use_local:
+        total_est = 0.0
+        rag_call_cost = 0.0
+        inject_call_cost = 0.0
+    else:
+        rag_call_cost = estimate_cost(model, 3000, 5000)["total_usd"]
+        inject_call_cost = estimate_cost(model, 2000, 500)["total_usd"]
+        total_est = rag_call_cost + n_inject_calls * inject_call_cost
     st.metric("🧮 Tahmini maliyet", f"${total_est:.4f}",
               help=f"1 RAG havuz + {n_inject_calls} inject çağrı "
                    f"({expected_violations} ihlal + {expected_compliant} uyumlu)")
@@ -290,6 +335,8 @@ if st.button("🤖 RAG'dan ihlal üret + enjekte et",
             compliant_addition_ratio=float(compliant_ratio),
             rag_k=int(rag_k),
             model=model.strip() or "gpt-4o",
+            llm_base_url=(llm_base_url.strip() if use_local else None),
+            llm_api_key=(llm_api_key if use_local else None),
             progress_cb=_cb,
         )
     except RuntimeError as e:

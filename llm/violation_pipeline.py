@@ -32,6 +32,8 @@ def run_rag_violation_pipeline(
     rag_k: int = 8,
     pool_oversample: float = 2.5,
     model: str = "gpt-4o",
+    llm_base_url: str | None = None,
+    llm_api_key: str | None = None,
     progress_cb=None,
     register_in_db: bool = True,
 ) -> dict:
@@ -67,8 +69,47 @@ def run_rag_violation_pipeline(
         }
     """
     from violation_pool import ifc_inject, rag, storage
+    from violation_pool._chat import chat_endpoint
     from violation_pool.llm import generate_rag
     from violation_pool.prompts import OPTIMIZED_PROMPT
+
+    # Local LLM override: tüm chat çağrıları (RAG havuz, inject, compliant)
+    # bu endpoint'e yönlendirilir. Embedding override edilmez.
+    with chat_endpoint(llm_base_url, llm_api_key):
+        return _run_inner(
+            dataset_tag=dataset_tag,
+            collection_name=collection_name,
+            categories=categories,
+            n_violations_per_ifc=n_violations_per_ifc,
+            violated_per_baseline=violated_per_baseline,
+            decoy_ratio=decoy_ratio,
+            compliant_addition_ratio=compliant_addition_ratio,
+            rag_k=rag_k,
+            pool_oversample=pool_oversample,
+            model=model,
+            progress_cb=progress_cb,
+            register_in_db=register_in_db,
+            llm_base_url=llm_base_url,
+        )
+
+
+def _run_inner(
+    dataset_tag: str, *,
+    collection_name: str,
+    categories,
+    n_violations_per_ifc: int,
+    violated_per_baseline: int,
+    decoy_ratio: float,
+    compliant_addition_ratio: float,
+    rag_k: int,
+    pool_oversample: float,
+    model: str,
+    progress_cb,
+    register_in_db: bool,
+    llm_base_url: str | None,
+) -> dict:
+    from violation_pool import ifc_inject, rag, storage
+    from violation_pool.llm import generate_rag
 
     t0 = time.time()
     results: dict = {
@@ -184,6 +225,7 @@ def run_rag_violation_pipeline(
                         "rag_k": int(rag_k),
                         "pool_oversample": float(pool_oversample),
                         "model": model,
+                        "llm_base_url": llm_base_url,
                         "rag_query": rag_query,
                         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                     },
