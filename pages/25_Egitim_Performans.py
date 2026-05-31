@@ -262,7 +262,9 @@ if detail:
     st.markdown("**📊 Train / Val / Test metrikleri**")
     metric_keys = [
         ("f1", "F1"), ("precision", "Precision"), ("recall", "Recall"),
-        ("auc_roc", "AUC"), ("balanced_acc", "Bal. Acc"),
+        ("accuracy", "Accuracy"),
+        ("balanced_accuracy", "Bal. Acc"),
+        ("auc_roc", "AUC ROC"), ("auc_pr", "AUC PR"),
         ("mcc", "MCC"), ("decoy_fpr", "Decoy FPR"),
     ]
     rows = []
@@ -293,23 +295,33 @@ if detail:
         st.markdown("**🔀 Split**")
         st.json(meta.get("split") or {}, expanded=True)
 
-    # History (loss/F1/AUC chart)
+    # History — her metrik ayrı küçük chart (eğri net görünsün)
     history = summary.get("history") or []
     if history:
-        st.markdown("**📈 Eğitim eğrisi**")
+        st.markdown("**📈 Eğitim eğrileri (epoch bazında)**")
         hdf = pd.DataFrame(history)
         if "epoch" in hdf.columns:
             hdf = hdf.set_index("epoch")
-        cc1, cc2 = st.columns(2)
-        _loss_cols = [c for c in hdf.columns if "loss" in c.lower()]
-        if _loss_cols:
-            cc1.caption("Loss")
-            cc1.line_chart(hdf[_loss_cols])
-        _eval_cols = [c for c in hdf.columns
-                       if c in ("f1", "auc_roc", "precision", "recall")]
-        if _eval_cols:
-            cc2.caption("Val metrikleri")
-            cc2.line_chart(hdf[_eval_cols])
+        _grid = [
+            ("Loss (train)", ["loss"]),
+            ("F1 (val)", ["f1"]),
+            ("Accuracy (val)", ["accuracy"]),
+            ("Balanced Accuracy (val)", ["balanced_accuracy"]),
+            ("Precision (val)", ["precision"]),
+            ("Recall (val)", ["recall"]),
+            ("AUC ROC (val)", ["auc_roc"]),
+            ("AUC PR (val)", ["auc_pr"]),
+            ("MCC (val)", ["mcc"]),
+            ("Decoy FPR (val)", ["decoy_fpr"]),
+        ]
+        for i in range(0, len(_grid), 2):
+            cols = st.columns(2)
+            for j, (title, ck) in enumerate(_grid[i:i + 2]):
+                if not all(c in hdf.columns for c in ck):
+                    cols[j].caption(f"{title}  _(history'de yok — eski run)_")
+                    continue
+                cols[j].caption(title)
+                cols[j].line_chart(hdf[ck], height=160)
 
     # Dataset paket detayı
     _ds = meta.get("dataset") or {}

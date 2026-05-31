@@ -442,20 +442,42 @@ if go:
             "epoch": ep,
             "loss": float(loss),
             "f1": _val("f1"),
-            "auc_roc": _val("auc_roc"),
             "precision": _val("precision"),
             "recall": _val("recall"),
+            "accuracy": _val("accuracy"),
+            "balanced_accuracy": _val("balanced_accuracy"),
+            "mcc": _val("mcc"),
+            "auc_roc": _val("auc_roc"),
+            "auc_pr": _val("auc_pr"),
+            "decoy_fpr": _val("decoy_fpr"),
         })
         bar.progress(min(1.0, ep / max(epochs, 1)),
                      text=f"epoch {ep}/{epochs} · loss={loss:.4f} · "
-                          f"val F1={_val('f1'):.3f}")
+                          f"val F1={_val('f1'):.3f} · "
+                          f"acc={_val('accuracy'):.3f}")
         df = pd.DataFrame(history).set_index("epoch")
+        # Her metrik için ayrı chart — üst üste binmesin, eğri net görünsün.
         with metric_slot.container():
-            cc1, cc2 = st.columns(2)
-            cc1.caption("Loss")
-            cc1.line_chart(df[["loss"]])
-            cc2.caption("Val F1 / AUC / Precision / Recall")
-            cc2.line_chart(df[["f1", "auc_roc", "precision", "recall"]])
+            _grid = [
+                ("Loss (train)", ["loss"]),
+                ("F1 (val)", ["f1"]),
+                ("Accuracy (val)", ["accuracy"]),
+                ("Balanced Accuracy (val)", ["balanced_accuracy"]),
+                ("Precision (val)", ["precision"]),
+                ("Recall (val)", ["recall"]),
+                ("AUC ROC (val)", ["auc_roc"]),
+                ("AUC PR (val)", ["auc_pr"]),
+                ("MCC (val)", ["mcc"]),
+                ("Decoy FPR (val)", ["decoy_fpr"]),
+            ]
+            # 2 sütunlu grid
+            for i in range(0, len(_grid), 2):
+                cc = st.columns(2)
+                for j, (title, cols) in enumerate(_grid[i:i + 2]):
+                    if not all(c in df.columns for c in cols):
+                        continue
+                    cc[j].caption(title)
+                    cc[j].line_chart(df[cols], height=160)
 
     def _on_log(msg: str) -> None:
         for line in str(msg).rstrip().split("\n"):
@@ -544,8 +566,10 @@ if go:
                     ("precision", "precision"),
                     ("recall", "recall"),
                     ("f1", "f1"),
+                    ("accuracy", "accuracy"),
+                    ("balanced_accuracy", "balanced_accuracy"),
                     ("auc_roc", "auc_roc"),
-                    ("balanced_acc", "balanced_accuracy"),
+                    ("auc_pr", "auc_pr"),
                     ("mcc", "mcc"),
                     ("decoy_fpr", "decoy_fpr"),
                 )
@@ -593,8 +617,10 @@ if go:
         ("f1", "F1"),
         ("precision", "Precision"),
         ("recall", "Recall"),
-        ("auc_roc", "AUC"),
+        ("accuracy", "Accuracy"),
         ("balanced_accuracy", "Bal. Acc"),
+        ("auc_roc", "AUC ROC"),
+        ("auc_pr", "AUC PR"),
         ("mcc", "MCC"),
         ("decoy_fpr", "Decoy FPR"),
     ]
