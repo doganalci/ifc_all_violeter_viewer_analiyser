@@ -674,15 +674,19 @@ if go:
     )
 
 
-# --- 6. Geçmiş run'lar ---------------------------------------------------
+# --- 6. Geçmiş run'lar (son 5 — tamamı için sayfa 25) -------------------
 st.divider()
-st.subheader("📋 Geçmiş run'lar")
+st.subheader("📋 Son eğitimler")
+st.caption(
+    "Sadece en son 5 run gösteriliyor. Tüm geçmiş + karşılaştırma + "
+    "detay incelemesi için **📈 Sayfa 25 — Eğitim Performans**."
+)
 run_root = Path("runs")
 if not run_root.exists():
     st.caption("Henüz hiç eğitim çalıştırılmamış.")
 else:
     rows = []
-    for rd in sorted(run_root.iterdir(), reverse=True):
+    for rd in sorted(run_root.iterdir(), reverse=True)[:5]:
         if not rd.is_dir():
             continue
         m = {}
@@ -719,9 +723,3 @@ else:
     if rows:
         st.dataframe(pd.DataFrame(rows), hide_index=True,
                      use_container_width=True)
-        st.caption(
-            "💡 Sayfa 15 → tahmin sütununda bu run'lardan birini seç → "
-            "'Tahmin Yap'."
-        )
-    else:
-        st.caption("Henüz hiç eğitim çalıştırılmamış.")
