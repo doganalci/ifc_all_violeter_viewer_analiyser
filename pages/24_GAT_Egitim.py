@@ -18,6 +18,7 @@ import streamlit as st
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
+from ml.app.state import get_dataset_root
 from ml.train.config import TrainConfig
 from ml.train.loop import run_training
 from services import datasets as ds
@@ -355,6 +356,7 @@ if go:
 
     cfg = TrainConfig(
         # Data
+        dataset_root=get_dataset_root(),
         cache_root=_per_dataset_cache,
         include_baselines=bool(include_baselines),
         mask_numeric_features=bool(mask_num),
