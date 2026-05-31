@@ -135,6 +135,8 @@ def run_training(
     _log(f"[train] device={device}  run_dir={run_dir}")
 
     _log(f"[train] cache_root: {Path(cfg.cache_root).expanduser().resolve()}")
+    # filter_ifc_ids varsa cache build sırasında sadece o ID'ler işlenir
+    # (171k yerine örn. 63 IFC) → saniyeler vs saatler farkı.
     ds_full = IFCViolationDataset(
         root=cfg.cache_root,
         dataset_root=cfg.dataset_root,
@@ -143,6 +145,8 @@ def run_training(
         mask_numeric_features=cfg.mask_numeric_features,
         mask_pset_features=cfg.mask_pset_features,
         mask_type_features=cfg.mask_type_features,
+        allowed_ifc_ids=(set(filter_ifc_ids)
+                          if filter_ifc_ids is not None else None),
     )
     _log(f"[train] cache file: {ds_full.processed_paths[0]}")
     if ds_full.processed_paths[0]:

@@ -103,6 +103,7 @@ class IFCViolationDataset(InMemoryDataset):
         mask_numeric_features: bool = False,
         mask_pset_features: bool = False,
         mask_type_features: bool = False,
+        allowed_ifc_ids: set[str] | None = None,
         transform: Callable | None = None,
     ):
         self._dataset_root = Path(dataset_root).expanduser().resolve()
@@ -111,6 +112,10 @@ class IFCViolationDataset(InMemoryDataset):
         self._mask_numeric = mask_numeric_features
         self._mask_psets = mask_pset_features
         self._mask_type = mask_type_features
+        # Sadece bu ID'leri build et — None ise tüm DB'yi tarar (eski
+        # davranış). Sayfa 24 dataset'in IFC ID listesini geçer, build
+        # saatler değil saniyeler sürer.
+        self._allowed_ids = set(allowed_ifc_ids) if allowed_ifc_ids else None
 
         # Cache freshness: DB'deki en yeni IFC, cache file'dan yeni mi?
         # Yeni IFC'ler eklendiyse cache stale — sil, baştan işle.
@@ -200,8 +205,11 @@ class IFCViolationDataset(InMemoryDataset):
 
         data_list: list[Data] = []
         oracle_total = 0
+        allowed = self._allowed_ids  # None ise hepsi
         with DatasetReader(self._dataset_root) as reader:
             for entry in iter_violated_with_paths(reader):
+                if allowed is not None and entry.id not in allowed:
+                    continue
                 sample = load_sample(
                     entry.graph_path, entry.labels_path, ifc_id=entry.id
                 )
@@ -211,6 +219,8 @@ class IFCViolationDataset(InMemoryDataset):
                 data_list.append(sample_to_data(sample, mask_numeric=self._mask_numeric, mask_psets=self._mask_psets, mask_type=self._mask_type))
             if self._include_baselines:
                 for entry in reader.list_baselines():
+                    if allowed is not None and entry.id not in allowed:
+                        continue
                     if not (entry.graph_path and entry.graph_path.exists()):
                         continue
                     sample = load_sample(entry.graph_path, None, ifc_id=entry.id)

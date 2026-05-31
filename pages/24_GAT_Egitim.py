@@ -307,11 +307,16 @@ def _purge_cache(cache_dir: Path) -> tuple[bool, str]:
     return True, "✓ Cache silindi (yeniden başlatma gerekmez)."
 
 
-# Cache yönetimi — yeni paket ekledikten sonra cache invalidate olmazsa
-# 'Filtre hiçbir IFC eşleştirmedi' hatası gelir. Burada görülür ve elle
-# silinebilir.
+# Cache yönetimi — eğitim artık dataset'e özel cache kullanıyor
+# (data/cache/<slug>/processed/...), eski global cache rahatsızlık vermez.
+# Yine de buradan tüm cache'leri silmek mümkün (disk temizliği için).
 _cache_dir = Path("./data/cache").expanduser().resolve()
 with st.expander(f"🗑 Cache yönetimi ({_cache_dir})"):
+    st.caption(
+        "💡 Eğitim artık her dataset için ayrı cache kullanıyor "
+        "(`data/cache/<dataset_slug>/`). Yeni paket eklediğinde cache "
+        "silmek **gerekmez**; sadece disk dolarsa eski olanları sil."
+    )
     if _cache_dir.exists():
         _cf = sorted(_cache_dir.glob("**/*.pt"))
         if _cf:
@@ -320,10 +325,11 @@ with st.expander(f"🗑 Cache yönetimi ({_cache_dir})"):
                 _mt = _dt.datetime.fromtimestamp(
                     cf.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
                 _sz = cf.stat().st_size / 1024 / 1024
-                st.caption(f"📦 `{cf.name}` · {_sz:.1f} MB · {_mt}")
+                _rel = cf.relative_to(_cache_dir)
+                st.caption(f"📦 `{_rel}` · {_sz:.1f} MB · {_mt}")
             if st.button("🗑 Tüm cache'i sil",
-                         help="Yeni paket ekledikten sonra ŞART. Cache "
-                              "otomatik yeniden işlenecek (~30 sn-2 dk).",
+                         help="Tüm dataset'lerin cache'i silinir; sonraki "
+                              "eğitimde her biri yeniden üretilir.",
                          key="clear_cache_top"):
                 ok, msg = _purge_cache(_cache_dir)
                 (st.success if ok else st.error)(msg)
@@ -339,8 +345,17 @@ go = st.button("🚀 Eğitimi başlat",
                disabled=(test_pct < 5 or not chosen_tags))
 
 if go:
+    # Cache'i dataset'e özel yapıyoruz → 'Filtre hiçbir IFC eşleştirmedi'
+    # hatası ortadan kalkar. Her dataset/slug kendi cache klasörüne yazar,
+    # global tek cache'e çakışmaz. Eski global cache (data/cache/processed/
+    # ifc_violation.pt) dokunulmadan kalır — kullanıcı isterse expander'dan
+    # silebilir, ama artık zorunlu değil.
+    _cache_token = (chosen_dataset_slug or "manual")
+    _per_dataset_cache = str(_cache_dir / _cache_token)
+
     cfg = TrainConfig(
         # Data
+        cache_root=_per_dataset_cache,
         include_baselines=bool(include_baselines),
         mask_numeric_features=bool(mask_num),
         mask_pset_features=bool(mask_pset),
