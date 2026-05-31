@@ -454,18 +454,40 @@ pred_info: dict = {}
 
 run_root = Path("runs")
 runs = _list_runs(run_root)
+
+
+def _run_label(p: Path) -> str:
+    """Dropdown'da run adı + dataset + model + Test F1 göster (varsa)."""
+    meta_p = p / "meta.json"
+    if not meta_p.exists():
+        return p.name
+    try:
+        m = json.loads(meta_p.read_text(encoding="utf-8"))
+    except Exception:
+        return p.name
+    ds_name = (m.get("dataset") or {}).get("name")
+    mt = (m.get("model") or {}).get("type", "?")
+    f1 = (m.get("test_metrics") or {}).get("f1")
+    parts = [p.name, f"model={mt}"]
+    if ds_name:
+        parts.append(f"data={ds_name}")
+    if f1 is not None:
+        parts.append(f"F1={f1:.3f}")
+    return "  ·  ".join(parts)
+
+
 mc = st.columns([3, 1, 1])
 with mc[0]:
     if runs:
         sel_run_idx = st.selectbox(
             "Eğitim run (GAT modeli)",
             options=list(range(len(runs))),
-            format_func=lambda i: runs[i].name,
+            format_func=lambda i: _run_label(runs[i]),
             key="mv_run",
         )
         sel_run = runs[sel_run_idx]
     else:
-        st.warning("Henüz eğitilmiş model yok. Tahmin yapılamaz.")
+        st.warning("Henüz eğitilmiş model yok. Sayfa 24'ten eğitebilirsin.")
         sel_run = None
 with mc[1]:
     threshold = st.slider("Eşik", 0.0, 1.0, 0.5, 0.05, key="mv_th")
