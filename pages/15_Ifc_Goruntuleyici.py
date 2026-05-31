@@ -307,6 +307,45 @@ pkg_counts = {p: sum(1 for b in all_baselines if _pkg_of(b) == p)
               for p in packages_set}
 packages = _sort_packages(list(packages_set), all_baselines, _pkg_of, sort_key)
 
+
+# --- 📚 Dataset filtresi (opsiyonel) -------------------------------------
+# Sayfa 23'te oluşturulan veri setleri buradan filtre olarak kullanılır.
+# Bir dataset seçilirse paket listesi yalnızca o dataset'in tag'lerine
+# daraltılır. Seçilmezse tüm paketler görünür (eski davranış).
+try:
+    from services import datasets as _datasets
+    _saved_datasets = _datasets.list_datasets()
+except Exception:
+    _saved_datasets = []
+
+if _saved_datasets:
+    _ds_opts = ["— (filtre yok, tüm paketler)"] + [d["slug"] for d in _saved_datasets]
+    _ds_map = {d["slug"]: d for d in _saved_datasets}
+    sel_ds = st.selectbox(
+        "📚 Veri seti filtresi (opsiyonel)",
+        options=_ds_opts,
+        format_func=lambda s: (
+            s if s.startswith("—")
+            else f"{_ds_map[s]['name']} · {len(_ds_map[s].get('tags') or [])} paket"
+        ),
+        key="mv_dataset_filter",
+        help="Sayfa 23'teki kayıtlı veri setlerinden seç → paket listesi "
+             "yalnızca o sete daralır.",
+    )
+    if not sel_ds.startswith("—"):
+        _ds_tags = set(_ds_map[sel_ds].get("tags") or [])
+        packages = [p for p in packages if p in _ds_tags]
+        if not packages:
+            st.warning(
+                f"⚠️ `{sel_ds}` veri setindeki paketlerden hiçbiri DB'de "
+                "yok (silinmiş olabilir)."
+            )
+            st.stop()
+        st.caption(
+            f"📚 Filtre aktif: **{_ds_map[sel_ds]['name']}** "
+            f"({len(packages)}/{len(_ds_tags)} paket DB'de mevcut)"
+        )
+
 sel_pkg = st.selectbox(
     "📦 Ana baseline (paket)",
     options=packages,
