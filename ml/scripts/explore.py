@@ -15,12 +15,11 @@ from collections import Counter
 from pathlib import Path
 
 _ML = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_ML))
 sys.path.insert(0, str(_ML.parent))
 
 from paths import data_home
-from data.graph_loader import load_sample
-from data.sqlite_reader import DatasetReader, iter_violated_with_paths
+from ml.data.graph_loader import load_sample
+from ml.data.sqlite_reader import DatasetReader, iter_violated_with_paths
 
 
 def main() -> None:

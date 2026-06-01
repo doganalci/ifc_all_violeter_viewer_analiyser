@@ -1,10 +1,34 @@
+# ============================================================
 # Konsolide gereksinimler — codex1 + viewer + ml
-# torch ve torch_geometric'i CUDA/CPU'ya göre ayrı index'ten kurabilirsiniz:
-#   pip install torch --index-url https://download.pytorch.org/whl/cpu
-#   pip install torch_geometric
+# ============================================================
+#
+# ⚠️ TORCH (PyTorch) BURADA DEĞİL — ayrı kurulur. Sebep: düz
+#    `pip install torch` Windows'ta CPU-only build verir (GPU çalışmaz).
+#    Doğru kurulum aşağıda. Bu dosyadaki paketleri kurmadan ÖNCE torch'u kur.
+#
+# --- ADIM 1: TORCH (GPU veya CPU) ---------------------------------------
+#
+#  A) NVIDIA GPU varsa (önerilen — conda, Windows'ta en sağlam):
+#       conda install -c pytorch -c nvidia pytorch pytorch-cuda=12.1 -y
+#       # CUDA sürümünü nvidia-smi ile öğren; cu118/cu121/cu124 uygun olanı.
+#       # conda/pip karışırsa: conda install ... --force-reinstall
+#
+#  B) GPU yoksa (CPU):
+#       pip install torch --index-url https://download.pytorch.org/whl/cpu
+#
+#  Kontrol:
+#       python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+#       # GPU'da: '2.x.x True'  ·  CPU'da: '2.x.x False'
+#
+# --- ADIM 2: torch_geometric (torch'tan SONRA) --------------------------
+#       pip install torch_geometric
+#
+# --- ADIM 3: geri kalan her şey -----------------------------------------
+#       pip install -r requirements.txt
+# ========================================================================
 
 # Core
-streamlit>=1.32
+streamlit>=1.36
 python-dotenv>=1.0
 pandas>=2.2
 numpy>=1.26
@@ -24,12 +48,12 @@ ifcopenshell>=0.7
 networkx>=3.2
 plotly>=5.20
 
-# ML (GAT)
-torch>=2.1
-torch_geometric>=2.4
-
 # Streamlit görselleştirme
 streamlit-agraph>=0.0.45
 
 # Geliştirme rahatlığı
 watchdog>=3.0
+
+# NOT: torch ve torch_geometric BİLEREK bu listede yok (yukarıdaki
+# ADIM 1-2'ye bak). `pip install -r requirements.txt` torch'a dokunmaz —
+# önceden kurduğun GPU/CPU build korunur.

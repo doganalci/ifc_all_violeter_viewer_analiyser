@@ -27,14 +27,13 @@ import streamlit as st
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
-sys.path.insert(0, str(_ROOT / "ml"))
 
-from app.state import (
+from ml.app.state import (
     entry_by_id, get_dataset_root, get_selected_node, labels_summary,
     load_sample_for, set_selected_node, sidebar_config,
 )
-from viz.graph_view import interactive_agraph
-from viz.ifc3d import build_figure, extract_meshes
+from ml.viz.graph_view import interactive_agraph
+from ml.viz.ifc3d import build_figure, extract_meshes
 
 
 # ---- Cached IFC tessellation ------------------------------------------------
@@ -79,7 +78,7 @@ def _panel_header(title: str, idx: int) -> bool:
                            help="Bu paneli tam genişlikte göster")
 
 
-def _render_ifc(meshes, *, violation_guids, decoy_guids,
+def _render_ifc(meshes, *, violation_guids, decoy_guids, normal_guids=None,
                 selected_guid, height, key_suffix=""):
     if meshes is None:
         st.info("IFC dosyası bulunamadı ya da ifcopenshell yok.")
@@ -88,13 +87,14 @@ def _render_ifc(meshes, *, violation_guids, decoy_guids,
         meshes,
         violation_guids=violation_guids,
         decoy_guids=decoy_guids,
+        normal_guids=normal_guids,
         selected_guid=selected_guid,
         height=height,
     )
     st.plotly_chart(fig, use_container_width=True, key=f"ifc_{key_suffix}")
 
 
-def _render_graph(sample, *, violation_guids, decoy_guids,
+def _render_graph(sample, *, violation_guids, decoy_guids, normal_guids=None,
                   selected_guid, height, key_suffix=""):
     if sample is None:
         st.info("Bu model için graph.json üretilmemiş.")
@@ -103,6 +103,7 @@ def _render_graph(sample, *, violation_guids, decoy_guids,
         sample.graph,
         violation_guids=violation_guids,
         decoy_guids=decoy_guids,
+        normal_guids=normal_guids,
         selected_guid=selected_guid,
         height=height,
         key=f"graph_{key_suffix}",
@@ -116,16 +117,92 @@ st.set_page_config(page_title="Model Görüntüleyici", layout="wide", page_icon
 entry = sidebar_config()
 
 st.title("🧱 Model Görüntüleyici")
-st.caption(
-    "Violated bir model seçince baseline ile **yan yana 4-panel** "
-    "karşılaştırma görürsün. Her panelin üstündeki **⛶ Büyüt** ile o "
-    "paneli tam genişliğe geçirebilirsin."
-)
 
 if entry is None:
     st.stop()
 
 root = get_dataset_root()
+
+# --- Üstte: Baseline'dan ihlalleri gez (sidebar Tür'üne bağlı değil) -------
+from ml.app.state import list_entries as _list_entries
+st.markdown("### 📦 Baseline'dan ihlalleri gez")
+st.caption(
+    "Bir baseline seç → ondan üretilen TÜM ihlalleri ◀▶ ile sırayla incele. "
+    "Solda baseline (temiz), sağda o ihlal. (Tek model incelemek için "
+    "soldaki sidebar'ı kullan.)"
+)
+# Baseline'ı graph şartı OLMADAN listele: baseline'ın 3D'si IFC'den gelir,
+# ihlal listesi de baseline'ın kendi graph'ına ihtiyaç duymaz. (require_graph
+# True iken graph'sız sentetik baseline'lar gizleniyordu → liste boş kalıyordu.)
+from ml.app.state import violated_children as _vchildren
+_all_baselines = _list_entries(root, kind="baseline", require_graph=False)
+_vio_counts = {b["id"]: len(_vchildren(root, b["id"])) for b in _all_baselines}
+
+
+def _pkg_of(b: dict) -> str:
+    """Baseline'ın oluşturulduğu paket (ana isim). dataset_tag yoksa
+    dosya adından türet (ör. 'basic2+1_baseline_v09_22_00044' →
+    'basic2+1_baseline_v09_22')."""
+    tag = b.get("dataset_tag")
+    if tag:
+        return tag
+    import re as _re
+    return _re.sub(r"_\d+$", "", b.get("name") or "(isimsiz)") or "(isimsiz)"
+
+
+# 1) Önce paket (baseline'ı oluşturduğumuz ana isim) seç
+_pkgs = sorted({_pkg_of(b) for b in _all_baselines})
+_pkg_counts = {p: sum(1 for b in _all_baselines if _pkg_of(b) == p) for p in _pkgs}
+_psel = st.selectbox(
+    "📦 Paket (baseline ana ismi)",
+    options=[None] + _pkgs,
+    index=0,
+    format_func=lambda p: ("— hepsi —" if p is None
+                           else f"{p} · {_pkg_counts.get(p, 0)} baseline"),
+    key="mv_pkg_browse",
+)
+# 2) Pakete göre baseline'ları süz, ihlal sayısına göre sırala
+_baselines = [b for b in _all_baselines if _psel is None or _pkg_of(b) == _psel]
+_baselines.sort(key=lambda b: (-_vio_counts.get(b["id"], 0), b["name"]))
+_bopts = [None] + list(range(len(_baselines)))
+_bsel = st.selectbox(
+    "Baseline seç (ihlallerini gezmek için)",
+    options=_bopts,
+    index=0,
+    format_func=lambda i: (
+        "— sidebar seçimini kullan —" if i is None
+        else f"{_baselines[i]['name']} · {_baselines[i]['id'][:8]} "
+             f"· {_vio_counts.get(_baselines[i]['id'], 0)} ihlal"),
+    key="mv_baseline_browse",
+)
+if _bsel is not None:
+    # Baseline gezgini moduna geç — entry'yi seçilen baseline yap
+    entry = _baselines[_bsel]
+    # Seçilen baseline'dan üretilen ihlalleri altta liste olarak göster
+    _kids = _vchildren(root, entry["id"])
+    if _kids:
+        import pandas as _pd
+        st.markdown(f"**📋 `{entry['name']}` baseline'ından üretilen "
+                    f"{len(_kids)} ihlal:**")
+        st.dataframe(
+            _pd.DataFrame([{
+                "#": i + 1,
+                "ihlal dosyası": k["name"],
+                "id": k["id"][:8],
+                "graph": "✓" if k.get("graph_ok") else "—",
+            } for i, k in enumerate(_kids)]),
+            hide_index=True, use_container_width=True, height=min(280, 60 + 35 * len(_kids)),
+        )
+        st.caption("Aşağıdan ◀▶ ile sırayla gez ya da açılır listeden seç.")
+    else:
+        st.info("Bu baseline'dan henüz ihlal üretilmemiş.")
+
+st.divider()
+st.caption(
+    "Violated bir model seçince baseline ile **yan yana 4-panel** "
+    "karşılaştırma görürsün. Her panelin üstündeki **⛶ Büyüt** ile o "
+    "paneli tam genişliğe geçirebilirsin."
+)
 
 # Selected sample (may be None if graph not generated yet)
 sample = load_sample_for(entry)
@@ -141,31 +218,65 @@ if entry["kind"] == "violated" and entry.get("parent_id"):
 # ---- Top controls -----------------------------------------------------------
 ctrl_a, ctrl_b = st.columns([3, 2])
 with ctrl_a:
-    overlay = st.multiselect(
-        "Vurgu katmanları",
-        options=["İhlaller", "Decoys"],
-        default=["İhlaller", "Decoys"],
-        help="Violated tarafında işaretli elemanları kırmızı/sarı boyar.",
-    )
+    st.markdown("**Etiket katmanları** (kutucuklarla seç)")
+    ov_c = st.columns(3)
+    _ov_vio = ov_c[0].checkbox("🔴 İhlal", value=True, key="ov_vio",
+                               help="Kural ihlali (y=1) — kırmızı.")
+    _ov_decoy = ov_c[1].checkbox("🟡 Yalancı ihlal (decoy)", value=True,
+                                 key="ov_decoy",
+                                 help="İşaretli ama gerçek ihlal değil — sarı.")
+    _ov_normal = ov_c[2].checkbox("🟢 İhlal değil (etiketli)", value=False,
+                                  key="ov_normal",
+                                  help="Açıkça 'uygun/clean' etiketli node'lar — "
+                                       "yeşil. Tam etiketlemede tüm yapı.")
+    overlay = set()
+    if _ov_vio:
+        overlay.add("İhlaller")
+    if _ov_decoy:
+        overlay.add("Decoys")
+    if _ov_normal:
+        overlay.add("Normal (ihlal olmayan etiketli)")
 with ctrl_b:
     if entry["kind"] == "violated" and partner_entry is None:
         st.warning("Bu violated modelin baseline'ı listede yok; sadece violated görüntüleniyor.")
     elif entry["kind"] == "violated":
         st.success(f"Baseline ile karşılaştırılıyor: `{partner_entry['id'][:8]}`")
     elif entry["kind"] == "baseline":
-        # Allow opening any one of its violated children alongside.
-        from app.state import violated_children
+        # Baseline seçilince: ondan üretilen TÜM ihlalleri gez (prev/next).
+        from ml.app.state import violated_children
         kids = violated_children(root, entry["id"])
         if kids:
-            kid_idx = st.selectbox(
-                "Yan yana göstermek için violated seç (opsiyonel)",
-                options=[None] + list(range(len(kids))),
-                format_func=lambda i: "— yok —" if i is None
-                                       else f"{kids[i]['name']} · {kids[i]['id'][:8]}",
-            )
-            if kid_idx is not None:
-                partner_entry = kids[kid_idx]
-                partner_sample = load_sample_for(partner_entry)
+            st.caption(f"🔢 Bu baseline'dan **{len(kids)}** ihlal üretilmiş — "
+                       "sırayla gez:")
+            _key = f"viobrowse_{entry['id']}"
+            cur = st.session_state.get(_key, 0)
+            cur = max(0, min(cur, len(kids) - 1))
+            nav = st.columns([1, 1, 3, 1])
+            if nav[0].button("◀ Önceki", use_container_width=True,
+                             disabled=cur == 0, key=f"{_key}_prev"):
+                st.session_state[_key] = cur - 1
+                st.rerun()
+            if nav[1].button("Sonraki ▶", use_container_width=True,
+                             disabled=cur >= len(kids) - 1, key=f"{_key}_next"):
+                st.session_state[_key] = cur + 1
+                st.rerun()
+            with nav[2]:
+                picked = st.selectbox(
+                    "İhlal seç",
+                    options=list(range(len(kids))),
+                    index=cur,
+                    format_func=lambda i: f"[{i+1}/{len(kids)}] {kids[i]['name']} · {kids[i]['id'][:8]}",
+                    key=f"{_key}_sel",
+                    label_visibility="collapsed",
+                )
+                if picked != cur:
+                    st.session_state[_key] = picked
+                    st.rerun()
+            nav[3].metric("Sıra", f"{cur+1}/{len(kids)}")
+            partner_entry = kids[cur]
+            partner_sample = load_sample_for(partner_entry)
+        else:
+            st.info("Bu baseline'dan henüz ihlal üretilmemiş.")
 
 # Determine which sample defines the violation/decoy sets (always
 # from the violated side — baseline has none of these labels).
@@ -189,8 +300,22 @@ else:
     violation_guids = set()
     decoy_guids = set()
 
+# Normal = etikette açıkça 'ihlal değil' (compliant / clean) işaretli node'lar.
+# İhlal ve decoy hariç tutulur; labels.json'dan okunur.
+normal_guids: set[str] = set()
+if violated_entry is not None:
+    _doc = labels_summary(violated_entry) or {}
+    for _l in _doc.get("labels", []):
+        _g = _l.get("ifc_global_id")
+        _stt = (_l.get("status") or "").lower()
+        if _g and _stt in ("compliant", "clean") and not _l.get("is_decoy"):
+            normal_guids.add(_g)
+    normal_guids -= violation_guids
+    normal_guids -= decoy_guids
+
 vio_show = violation_guids if "İhlaller" in overlay else set()
 dec_show = decoy_guids if "Decoys" in overlay else set()
+nor_show = normal_guids if "Normal (ihlal olmayan etiketli)" in overlay else set()
 
 # ---- Selected node + panels -------------------------------------------------
 current = get_selected_node()
@@ -224,6 +349,7 @@ def panel_violated_ifc(height: int):
     _render_ifc(violated_meshes,
                 violation_guids=vio_show,
                 decoy_guids=dec_show,
+                normal_guids=nor_show,
                 selected_guid=current,
                 height=height, key_suffix="violated_ifc")
 
@@ -243,6 +369,7 @@ def panel_violated_graph(height: int):
     clicked = _render_graph(violated_sample,
                             violation_guids=vio_show,
                             decoy_guids=dec_show,
+                            normal_guids=nor_show,
                             selected_guid=current,
                             height=height, key_suffix="violated_graph")
     if clicked and clicked != current:

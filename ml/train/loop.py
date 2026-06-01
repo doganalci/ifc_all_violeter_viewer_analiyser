@@ -13,9 +13,9 @@ import torch
 import torch.nn as nn
 from torch_geometric.loader import DataLoader
 
-from data import IFCViolationDataset, split_by_baseline
-from data.splits import SplitIndices
-from model import GATNodeClassifier, HeteroGATNodeClassifier
+from ml.data import IFCViolationDataset, split_by_baseline
+from ml.data.splits import SplitIndices
+from ml.model import GATNodeClassifier, HeteroGATNodeClassifier
 
 from .config import TrainConfig
 from .metrics import EvalResult, evaluate_predictions
@@ -65,6 +65,7 @@ def _eval(model: nn.Module, loader: DataLoader, device: str, threshold: float) -
     model.eval()
     y_all: list[np.ndarray] = []
     p_all: list[np.ndarray] = []
+    s_all: list[np.ndarray] = []          # raw sigmoid skorları — AUC için
     d_all: list[np.ndarray] = []
     c_all: list[str | None] = []
     with torch.no_grad():
@@ -75,9 +76,8 @@ def _eval(model: nn.Module, loader: DataLoader, device: str, threshold: float) -
             preds = (probs >= threshold).astype(np.int64)
             y_all.append(batch.y.cpu().numpy())
             p_all.append(preds)
+            s_all.append(probs)
             d_all.append(batch.decoy_mask.cpu().numpy())
-            # Categories are stored as a python list per Data; PyG batches
-            # them into a list-of-lists. Flatten in order.
             for cats in batch.categories:
                 c_all.extend(cats)
     return evaluate_predictions(
@@ -85,6 +85,7 @@ def _eval(model: nn.Module, loader: DataLoader, device: str, threshold: float) -
         np.concatenate(p_all),
         np.concatenate(d_all),
         categories=c_all,
+        y_score=np.concatenate(s_all),
     )
 
 
@@ -133,16 +134,45 @@ def run_training(
 
     _log(f"[train] device={device}  run_dir={run_dir}")
 
+    _log(f"[train] cache_root: {Path(cfg.cache_root).expanduser().resolve()}")
+    # filter_ifc_ids varsa cache build sırasında sadece o ID'ler işlenir
+    # (171k yerine örn. 63 IFC) → saniyeler vs saatler farkı.
     ds_full = IFCViolationDataset(
         root=cfg.cache_root,
         dataset_root=cfg.dataset_root,
         include_baselines=cfg.include_baselines,
+        use_rule_oracle=cfg.use_rule_oracle,
+        mask_numeric_features=cfg.mask_numeric_features,
+        mask_pset_features=cfg.mask_pset_features,
+        mask_type_features=cfg.mask_type_features,
+        allowed_ifc_ids=(set(filter_ifc_ids)
+                          if filter_ifc_ids is not None else None),
     )
+    _log(f"[train] cache file: {ds_full.processed_paths[0]}")
+    if ds_full.processed_paths[0]:
+        from os.path import exists, getmtime
+        from datetime import datetime as _dt
+        if exists(ds_full.processed_paths[0]):
+            _log(f"[train] cache mtime: {_dt.fromtimestamp(getmtime(ds_full.processed_paths[0]))}")
+        else:
+            _log("[train] cache yok — yeni oluşturuluyor")
     if filter_ifc_ids is not None:
         allow = set(filter_ifc_ids)
+        cache_ids = {ds_full[i].ifc_id for i in range(len(ds_full))}
         keep = [i for i in range(len(ds_full)) if ds_full[i].ifc_id in allow]
         if not keep:
-            raise RuntimeError("Filtre hiçbir IFC eşleştirmedi.")
+            missing = sorted(allow - cache_ids)[:5]
+            raise RuntimeError(
+                f"Filtre hiçbir IFC eşleştirmedi.\n"
+                f"  Cache'teki IFC sayısı: {len(cache_ids)}\n"
+                f"  Filtrede istenen: {len(allow)}\n"
+                f"  Cache'te BULUNMAYAN ilk birkaç ID: "
+                f"{[m[:8] for m in missing]}\n"
+                f"  → ÇOĞU DURUMDA CACHE BAYAT. Çözüm: GAT Eğitim sayfasında "
+                f"'🗑 Cache yönetimi' expander'ından 'Tüm cache'i sil' butonuna "
+                f"bas, sonra tekrar başlat. Cache otomatik yeniden işlenecek "
+                f"(yeni paketin IFC'leri dahil)."
+            )
         ds = ds_full[keep]
     else:
         ds = ds_full
@@ -195,6 +225,7 @@ def run_training(
     no_improve = 0
     history: list[dict] = []
     stopped_early = False
+    _train_t0 = time.time()
 
     for epoch in range(1, cfg.epochs + 1):
         if should_stop and should_stop():
@@ -225,7 +256,9 @@ def run_training(
         _log(
             f"epoch {epoch:03d}  loss={train_loss:.4f}  "
             f"val_f1={val_res.f1:.3f}  P={val_res.precision:.3f}  "
-            f"R={val_res.recall:.3f}  decoy_fpr={val_res.decoy_fpr:.3f}  "
+            f"R={val_res.recall:.3f}  bal_acc={val_res.balanced_accuracy:.3f}  "
+            f"MCC={val_res.mcc:+.2f}  AUC={val_res.auc_roc:.3f}  "
+            f"decoy_fpr={val_res.decoy_fpr:.3f}  "
             f"[{dt:.1f}s]"
         )
         history.append(
@@ -242,28 +275,68 @@ def run_training(
             torch.save(model.state_dict(), run_dir / "best.pt")
         else:
             no_improve += 1
-            if no_improve >= cfg.patience:
+            # patience > 0 ise erken durdurma aktif. 0 ya da negatif
+            # değer 'erken durdurma kapalı' anlamına gelir; tüm epoch'lar
+            # çalışır (en uzun süre öğrensin diye).
+            if cfg.patience > 0 and no_improve >= cfg.patience:
                 _log(f"[train] early stopping at epoch {epoch} (no val F1 improvement)")
                 stopped_early = True
                 break
 
-    # Restore best weights for test.
+    total_train_seconds = time.time() - _train_t0
+
+    # Restore best weights for final evaluation on all three splits.
     ckpt = run_dir / "best.pt"
     if ckpt.exists():
         model.load_state_dict(torch.load(ckpt, map_location=device))
 
+    _t = time.time()
+    train_eval_loader = DataLoader(ds[splits.train], batch_size=4, shuffle=False)
+    train_res = (
+        _eval(model, train_eval_loader, device, cfg.threshold).to_dict()
+        if splits.train else None
+    )
+    train_eval_seconds = time.time() - _t
+    _t = time.time()
+    val_res = (
+        _eval(model, val_loader, device, cfg.threshold).to_dict()
+        if val_loader is not None else None
+    )
+    val_eval_seconds = time.time() - _t
+    _t = time.time()
     test_res = (
         _eval(model, test_loader, device, cfg.threshold).to_dict()
-        if test_loader is not None
-        else None
+        if test_loader is not None else None
     )
+    test_eval_seconds = time.time() - _t
+
+    _n_tr = len(splits.train) or 1
+    _n_te = len(splits.test) or 1
+    _epochs_run = len(history) or 1
+    timing = {
+        "total_train_seconds": round(total_train_seconds, 2),
+        "epochs_run": _epochs_run,
+        "avg_epoch_seconds": round(total_train_seconds / _epochs_run, 3),
+        "train_samples": len(splits.train),
+        "test_samples": len(splits.test),
+        # IFC (örnek) başına ortalama eğitim süresi (ms) — bir epoch'ta
+        "per_sample_train_ms": round(
+            (total_train_seconds / _epochs_run) / _n_tr * 1000, 2),
+        "test_eval_seconds": round(test_eval_seconds, 2),
+        "per_sample_test_ms": round(test_eval_seconds / _n_te * 1000, 2),
+        "train_eval_seconds": round(train_eval_seconds, 2),
+        "val_eval_seconds": round(val_eval_seconds, 2),
+    }
 
     summary = {
         "best_epoch": best_epoch,
         "best_val_f1": best_f1,
+        "train": train_res,
+        "val": val_res,
         "test": test_res,
         "history": history,
         "stopped_early": stopped_early,
+        "timing": timing,
         "run_dir": str(run_dir),
         "ifc_ids": {
             "train": [ds[i].ifc_id for i in splits.train],
@@ -273,6 +346,55 @@ def run_training(
     }
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     _log(f"[train] done. best val F1={best_f1:.3f} @ epoch {best_epoch}")
+    _log(f"[train] süre: toplam={timing['total_train_seconds']}s · "
+         f"epoch_ort={timing['avg_epoch_seconds']}s · "
+         f"örnek/epoch={timing['per_sample_train_ms']}ms · "
+         f"test_değerlendirme={timing['test_eval_seconds']}s "
+         f"({timing['per_sample_test_ms']}ms/IFC)")
+
+    # Deney defterine (data klasörü/experiments.xlsx) bir satır ekle — eğitimi
+    # asla bozmadan, best-effort.
+    try:
+        from ml.tracking import record_run
+        _rp = record_run(run_dir)
+        if _rp:
+            _log(f"[train] deney defterine eklendi: {_rp}")
+    except Exception as _te:
+        _log(f"[train] deney defteri yazılamadı (atlandı): {_te}")
+
+    # Detaylı PDF rapor üret (best-effort).
+    try:
+        from ml.report import build_report
+        _pdf = build_report(run_dir)
+        if _pdf:
+            _log(f"[train] PDF rapor üretildi: {_pdf}")
+    except Exception as _re:
+        _log(f"[train] PDF rapor üretilemedi (atlandı): {_re}")
     if test_res is not None:
-        _log(f"[train] test: f1={test_res['f1']:.3f}  decoy_fpr={test_res['decoy_fpr']:.3f}")
+        _log(f"[train] test: f1={test_res['f1']:.3f}  "
+             f"P={test_res['precision']:.3f}  R={test_res['recall']:.3f}  "
+             f"bal_acc={test_res['balanced_accuracy']:.3f}  "
+             f"MCC={test_res['mcc']:+.2f}  AUC={test_res['auc_roc']:.3f}  "
+             f"decoy_fpr={test_res['decoy_fpr']:.3f}")
+        _log("[train] confusion matrix:")
+        cm = test_res["confusion"]
+        _log(f"  TN={cm['tn']:>6d}  FP={cm['fp']:>6d}")
+        _log(f"  FN={cm['fn']:>6d}  TP={cm['tp']:>6d}")
+
+    # macOS + torch + streamlit etkileşimindeki teardown segfault'unu
+    # azaltmak için açıkça temizlik yap. Her zaman çözmez ama bazen yardımı dokunur.
+    try:
+        import gc
+        del model, optim, loss_fn
+        del train_loader
+        if val_loader is not None:
+            del val_loader
+        if test_loader is not None:
+            del test_loader
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
     return summary

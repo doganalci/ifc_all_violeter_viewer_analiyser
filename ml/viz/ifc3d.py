@@ -23,6 +23,7 @@ COLOR_DECOY = "#ffbb33"
 COLOR_SELECTED = "#1aa3ff"
 COLOR_PATH = "#33cc66"
 COLOR_PATH_ALT = "#bb66ff"   # second path overlay (for comparisons)
+COLOR_NORMAL = "#5cb85c"     # explicitly-labeled non-violation (clean/compliant)
 
 
 @dataclass
@@ -81,6 +82,7 @@ def build_figure(
     *,
     violation_guids: Iterable[str] | None = None,
     decoy_guids: Iterable[str] | None = None,
+    normal_guids: Iterable[str] | None = None,
     selected_guid: str | None = None,
     path_guids: Iterable[str] | None = None,
     path_alt_guids: Iterable[str] | None = None,
@@ -96,6 +98,7 @@ def build_figure(
 
     vio = set(violation_guids or [])
     dc = set(decoy_guids or [])
+    normal = set(normal_guids or [])
     path = set(path_guids or [])
     path_alt = set(path_alt_guids or [])
 
@@ -116,6 +119,9 @@ def build_figure(
         elif m.guid in dc:
             color, opacity = COLOR_DECOY, 1.0
             tag = "[DECOY]"
+        elif m.guid in normal:
+            color, opacity = COLOR_NORMAL, 0.7
+            tag = "[NORMAL]"
         else:
             color, opacity, tag = COLOR_BASE, 0.22, ""
         traces.append(go.Mesh3d(

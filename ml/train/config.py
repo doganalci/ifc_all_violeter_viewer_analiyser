@@ -10,6 +10,10 @@ class TrainConfig:
     dataset_root: str = "../codex1"
     cache_root: str = "./data/cache"
     include_baselines: bool = False
+    use_rule_oracle: bool = False         # Kural-tabanlı etiket augmentation
+    mask_numeric_features: bool = False   # OverallWidth/Height/NominalHeight/Elevation sıfırla
+    mask_pset_features: bool = False      # Pset bayrakları + IsExternal + FireRating sıfırla
+    mask_type_features: bool = False      # IFC tipi one-hot sıfırla (add_obstruction leak)
     val_frac: float = 0.15
     test_frac: float = 0.15
     split_seed: int = 0

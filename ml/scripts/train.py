@@ -14,12 +14,11 @@ from pathlib import Path
 
 # Make `data/`, `model/`, `train/` importable when run via `python scripts/train.py`.
 _ML = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_ML))
 sys.path.insert(0, str(_ML.parent))
 
 from paths import data_home, ml_runs_dir
-from train.config import TrainConfig
-from train.loop import run_training
+from ml.train.config import TrainConfig
+from ml.train.loop import run_training
 
 
 def _parse() -> TrainConfig:

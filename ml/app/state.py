@@ -19,11 +19,10 @@ import sys
 # Allow `from data import ...` when this module runs from `ml/`.
 _ML_ROOT = Path(__file__).resolve().parents[1]
 _PROG_ROOT = _ML_ROOT.parent
-sys.path.insert(0, str(_ML_ROOT))
 sys.path.insert(0, str(_PROG_ROOT))
 
-from data.graph_loader import load_sample  # ml/data/graph_loader.py
-from data.sqlite_reader import DatasetReader  # ml/data/sqlite_reader.py
+from ml.data.graph_loader import load_sample  # ml/data/graph_loader.py
+from ml.data.sqlite_reader import DatasetReader  # ml/data/sqlite_reader.py
 from paths import data_home  # konsolide veri klasörü
 
 
@@ -47,6 +46,10 @@ def set_dataset_root(p: str) -> None:
     st.session_state[_DATASET_ROOT_KEY] = p
     # New root → existing list cache is stale.
     list_entries.clear()  # type: ignore[attr-defined]
+    try:
+        children_by_parent.clear()  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
 def get_selected_model_id() -> str | None:
@@ -123,6 +126,8 @@ def list_entries(root: str, kind: str | None = None,
             "meta_path": str(e.meta_path) if e.meta_path else None,
             "status": e.status,
             "graph_ok": graph_ok,
+            "dataset_tag": getattr(e, "dataset_tag", None),
+            "llm_model": getattr(e, "llm_model", None),
         })
     return out
 
@@ -134,12 +139,24 @@ def entry_by_id(root: str, model_id: str) -> dict | None:
     return None
 
 
+@st.cache_data(show_spinner=False)
+def children_by_parent(root: str) -> dict[str, list[dict]]:
+    """parent_id → violated çocuklar haritası (TEK geçişte, önbellekli).
+
+    Önceden `violated_children` her çağrıda tüm kayıtları tarıyordu; büyük
+    veri kümesinde (10k+ IFC) bu O(baseline × kayıt) → arayüz donuyordu.
+    Bunu tek geçişe indirir.
+    """
+    out: dict[str, list[dict]] = {}
+    for e in list_entries(root, kind=None):
+        if e["kind"] == "violated" and e.get("parent_id"):
+            out.setdefault(e["parent_id"], []).append(e)
+    return out
+
+
 def violated_children(root: str, baseline_id: str) -> list[dict]:
-    """Return all violated entries whose parent_id is the given baseline."""
-    return [
-        e for e in list_entries(root, kind=None)
-        if e["kind"] == "violated" and e.get("parent_id") == baseline_id
-    ]
+    """Verilen baseline'ın tüm violated çocukları (önbellekli haritadan, O(1))."""
+    return children_by_parent(root).get(baseline_id, [])
 
 
 @st.cache_data(show_spinner=False)

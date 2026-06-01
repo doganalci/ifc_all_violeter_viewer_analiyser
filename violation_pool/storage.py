@@ -110,8 +110,10 @@ CREATE TABLE IF NOT EXISTS ifc_violation_labels (
 
 @contextmanager
 def _conn():
-    conn = sqlite3.connect(settings.db_path)
+    conn = sqlite3.connect(settings.db_path, timeout=30.0)
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")     # concurrent writers
+    conn.execute("PRAGMA busy_timeout = 30000")   # 30s bekle, hata atma
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -134,6 +136,8 @@ def init_db() -> None:
         icols = {r["name"] for r in c.execute("PRAGMA table_info(ifc_models)").fetchall()}
         if icols and "graph_path" not in icols:
             c.execute("ALTER TABLE ifc_models ADD COLUMN graph_path TEXT")
+        if icols and "dataset_tag" not in icols:
+            c.execute("ALTER TABLE ifc_models ADD COLUMN dataset_tag TEXT")
         lcols = {r["name"] for r in c.execute("PRAGMA table_info(ifc_violation_labels)").fetchall()}
         if lcols and "is_decoy" not in lcols:
             c.execute("ALTER TABLE ifc_violation_labels ADD COLUMN is_decoy INTEGER NOT NULL DEFAULT 0")
@@ -312,19 +316,20 @@ def create_ifc_model(
     error: str | None = None,
     graph_path: str | None = None,
     id: str | None = None,
+    dataset_tag: str | None = None,
 ) -> str:
     mid = id or str(uuid.uuid4())
     with _conn() as c:
         c.execute(
             """INSERT INTO ifc_models(id, kind, name, parent_id, llm_model, prompt,
                pool_run_id, params_json, file_path, meta_path, labels_path,
-               graph_path, status, error, created_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               graph_path, status, error, created_at, dataset_tag)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 mid, kind, name, parent_id, llm_model, prompt, pool_run_id,
                 json.dumps(params or {}, ensure_ascii=False),
                 file_path, meta_path, labels_path, graph_path,
-                status, error, now(),
+                status, error, now(), dataset_tag,
             ),
         )
     return mid
@@ -333,6 +338,108 @@ def create_ifc_model(
 def set_ifc_graph_path(ifc_id: str, graph_path: str) -> None:
     with _conn() as c:
         c.execute("UPDATE ifc_models SET graph_path=? WHERE id=?", (graph_path, ifc_id))
+
+
+def list_dataset_tags() -> list[dict]:
+    """DB'deki dataset_tag'leri ve her birinin IFC sayısını döndür.
+
+    Bir violated IFC'nin tag'ı: kendi dataset_tag'ı varsa onu kullan,
+    yoksa parent baseline'ın dataset_tag'ı (varsa) kullan.
+    """
+    with _conn() as c:
+        rows = c.execute(
+            """
+            SELECT
+              COALESCE(child.dataset_tag, parent.dataset_tag, '(etiketsiz)') AS tag,
+              child.kind AS kind,
+              COUNT(*) AS n
+            FROM ifc_models child
+            LEFT JOIN ifc_models parent ON child.parent_id = parent.id
+            GROUP BY tag, child.kind
+            ORDER BY tag, child.kind
+            """
+        ).fetchall()
+        # Eğitilebilir violated: status ok/partial + graph_path dolu
+        trainable_rows = c.execute(
+            """
+            SELECT
+              COALESCE(child.dataset_tag, parent.dataset_tag, '(etiketsiz)') AS tag,
+              COUNT(*) AS n
+            FROM ifc_models child
+            LEFT JOIN ifc_models parent ON child.parent_id = parent.id
+            WHERE child.kind='violated'
+              AND child.status IN ('ok','partial')
+              AND child.graph_path IS NOT NULL
+            GROUP BY tag
+            """
+        ).fetchall()
+    trainable = {r["tag"]: int(r["n"]) for r in trainable_rows}
+    out: dict[str, dict] = {}
+    for r in rows:
+        out.setdefault(r["tag"], {"tag": r["tag"], "baseline": 0, "violated": 0,
+                                  "imported": 0, "total": 0, "eğitilebilir": 0})
+        out[r["tag"]][r["kind"]] = int(r["n"])
+        out[r["tag"]]["total"] += int(r["n"])
+    for tag, n in trainable.items():
+        if tag in out:
+            out[tag]["eğitilebilir"] = n
+    return list(out.values())
+
+
+def ifc_ids_for_tags(tags: list[str] | None, kind: str | None = None) -> list[str]:
+    """tags listesindeki dataset'lere ait IFC id'lerini döndür.
+
+    tags None veya boş → tüm dataset'ler (filtre yok).
+    kind verilirse o kind ile filtreler ('baseline' | 'violated' | 'imported').
+    """
+    sql = (
+        "SELECT child.id FROM ifc_models child "
+        "LEFT JOIN ifc_models parent ON child.parent_id = parent.id WHERE 1=1"
+    )
+    args: list = []
+    if tags:
+        # '(etiketsiz)' özel: NULL'a düşen kayıtlar
+        if "(etiketsiz)" in tags:
+            tags_no_special = [t for t in tags if t != "(etiketsiz)"]
+            if tags_no_special:
+                placeholders = ",".join("?" * len(tags_no_special))
+                sql += (f" AND ((child.dataset_tag IN ({placeholders}) OR "
+                        f"parent.dataset_tag IN ({placeholders})) OR "
+                        f"(child.dataset_tag IS NULL AND parent.dataset_tag IS NULL))")
+                args += list(tags_no_special) + list(tags_no_special)
+            else:
+                sql += " AND (child.dataset_tag IS NULL AND parent.dataset_tag IS NULL)"
+        else:
+            placeholders = ",".join("?" * len(tags))
+            sql += (f" AND (child.dataset_tag IN ({placeholders}) OR "
+                    f"parent.dataset_tag IN ({placeholders}))")
+            args += list(tags) + list(tags)
+    if kind:
+        sql += " AND child.kind = ?"
+        args.append(kind)
+    with _conn() as c:
+        return [r["id"] for r in c.execute(sql, args).fetchall()]
+
+
+def _resolve_paths(row: dict) -> dict:
+    """DB'deki dosya yollarını mevcut IFC_DATA_HOME'a göre yeniden çöz.
+
+    Veriler başka makinede / eski klasörde üretildiyse mutlak yollar
+    kırılır. Bu fonksiyon her ifc kaydının `file_path`, `meta_path`,
+    `labels_path`, `graph_path` alanlarını gerçek dosya konumuna günceller
+    (DB'yi yazmaz, sadece okumada çevirir). Bulunamazsa orijinal değer
+    korunur ki hata mesajı bilgi verici olsun.
+    """
+    # Lazy import: paths modülü violation_pool'a bağlı değil (circular değil
+    # ama gereksiz yere import zamanını uzatmamak için).
+    from paths import resolve_stored_path
+    for key in ("file_path", "meta_path", "labels_path", "graph_path"):
+        v = row.get(key)
+        if v:
+            resolved = resolve_stored_path(v)
+            if resolved is not None:
+                row[key] = str(resolved)
+    return row
 
 
 def list_ifc_models(kind: str | None = None) -> list[dict]:
@@ -344,13 +451,13 @@ def list_ifc_models(kind: str | None = None) -> list[dict]:
     q += " ORDER BY datetime(created_at) DESC"
     with _conn() as c:
         rows = c.execute(q, args).fetchall()
-    return [dict(r) for r in rows]
+    return [_resolve_paths(dict(r)) for r in rows]
 
 
 def get_ifc_model(ifc_id: str) -> dict | None:
     with _conn() as c:
         r = c.execute("SELECT * FROM ifc_models WHERE id=?", (ifc_id,)).fetchone()
-    return dict(r) if r else None
+    return _resolve_paths(dict(r)) if r else None
 
 
 def delete_ifc_model(ifc_id: str) -> None:
@@ -429,7 +536,12 @@ def record_usage(
 
 def record_usage_from_openai(usage_obj, *, operation: str, model: str,
                              **refs) -> None:
-    """OpenAI response.usage objesinden veya dict'inden kaydeder."""
+    """OpenAI response.usage objesinden veya dict'inden kaydeder.
+
+    `refs` içinde `record_usage`'ın bilmediği anahtarlar (örn. phase, paket)
+    gelirse hatayla durmak yerine note alanına serialize edilir; böylece
+    çağıran tarafta arbitrary metadata gönderebilir.
+    """
     if usage_obj is None:
         return
     if hasattr(usage_obj, "prompt_tokens"):
@@ -440,9 +552,18 @@ def record_usage_from_openai(usage_obj, *, operation: str, model: str,
         pt = usage_obj.get("prompt_tokens", 0) or 0
         ct = usage_obj.get("completion_tokens", 0) or 0
         tt = usage_obj.get("total_tokens")
+
+    known = {"pool_run_id", "ifc_model_id", "collection", "note"}
+    clean = {k: v for k, v in refs.items() if k in known}
+    extras = {k: v for k, v in refs.items() if k not in known}
+    if extras:
+        extras_str = " ".join(f"{k}={v}" for k, v in extras.items())
+        clean["note"] = (clean.get("note") + " " + extras_str
+                         if clean.get("note") else extras_str)
+
     record_usage(operation=operation, model=model,
                  prompt_tokens=pt, completion_tokens=ct, total_tokens=tt,
-                 **refs)
+                 **clean)
 
 
 def list_usage(

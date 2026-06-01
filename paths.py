@@ -31,12 +31,30 @@ def _from_env() -> Optional[Path]:
     raw = os.getenv("IFC_DATA_HOME", "").strip()
     if not raw:
         return None
-    return Path(raw).expanduser().resolve()
+    p = Path(raw).expanduser()
+    # Görece yol verildiyse önce program kökü, sonra cwd'ye göre çöz.
+    if not p.is_absolute():
+        cand1 = (_PROGRAM_ROOT / p).resolve()
+        if cand1.exists():
+            return cand1
+        cand2 = (Path.cwd() / p).resolve()
+        if cand2.exists():
+            return cand2
+        return cand1  # exist etmiyor olsa da bu seçim — create=True ile oluşur
+    return p.resolve()
 
 
 def _from_sibling() -> Optional[Path]:
-    cand = _PROGRAM_ROOT.parent / _SIBLING_NAME
-    return cand if cand.exists() else None
+    """Program kökünün hemen yanındaki olası veri klasörleri.
+
+    Adlar (öncelik sırası): `ifc_desktop_doc_dataset/`, `data/`
+    """
+    parent = _PROGRAM_ROOT.parent
+    for name in (_SIBLING_NAME, "data"):
+        cand = parent / name
+        if cand.exists():
+            return cand
+    return None
 
 
 def _from_desktop_fallback() -> Optional[Path]:
@@ -62,6 +80,11 @@ def resolve_data_home(create: bool = True) -> Path:
     os.environ["IFC_DATA_HOME"] = str(home)
     return home
 
+
+# Çözümleme öncesinde program kökündeki .env'yi yükle — kullanıcının
+# `IFC_DATA_HOME=...` satırını oraya yazabilmesi için. Veri klasöründeki
+# .env çözümlemeden sonra yüklenir (zaten oraya `OPENAI_API_KEY` vs. girer).
+load_dotenv(_PROGRAM_ROOT / ".env", override=False)
 
 # Modül yüklendiğinde bir kez çöz; tüm alt modüller bu değeri paylaşır.
 try:
@@ -118,10 +141,53 @@ def env_file() -> Path:
     return data_home() / ".env"
 
 
-# .env dosyalarını yükle: önce veri reposundaki (asıl), sonra program
-# reposundaki (geriye dönük uyumluluk için, ama yoksa sorun değil).
+def resolve_stored_path(p: str | Path | None) -> Optional[Path]:
+    """DB'de saklanan bir dosya yolunu mevcut IFC_DATA_HOME'a göre çöz.
+
+    Veriler başka bir makinede veya eski klasör yerleşiminde üretildiyse
+    DB'deki mutlak yol artık geçerli olmayabilir. Bu fonksiyon dört
+    aşamayla dener:
+      1) Yol absolut ve mevcut → olduğu gibi döndür
+      2) Yol görece → IFC_DATA_HOME'a göre çöz
+      3) Sadece dosya adıyla IFC_DATA_HOME/ifc_models/{baseline,violated,imports}/
+         altında arama yap
+      4) Bulunamazsa None döner (orijinal hata kullanıcıya gösterilir)
+    """
+    if not p:
+        return None
+    candidate = Path(str(p)).expanduser()
+
+    if candidate.is_absolute() and candidate.exists():
+        return candidate
+
+    if not candidate.is_absolute():
+        try:
+            anchored = (data_home() / candidate).resolve()
+        except RuntimeError:
+            anchored = None
+        if anchored and anchored.exists():
+            return anchored
+
+    # Filename-based search under IFC_DATA_HOME/ifc_models/*
+    name = candidate.name
+    try:
+        models_root = ifc_models_dir()
+    except RuntimeError:
+        return None
+    for kind in ("baseline", "violated", "imports"):
+        cand = models_root / kind / name
+        if cand.exists():
+            return cand
+    # Son çare: tüm ifc_models altında rglob (yavaş ama emniyet)
+    for found in models_root.rglob(name):
+        if found.is_file():
+            return found
+    return None
+
+
+# Veri klasöründeki .env (API anahtarları vs.) — program .env zaten
+# yukarıda yüklendi, override etmiyoruz.
 if DATA_HOME is not None:
     _data_env = env_file()
     if _data_env.exists():
         load_dotenv(_data_env, override=False)
-load_dotenv(_PROGRAM_ROOT / ".env", override=False)

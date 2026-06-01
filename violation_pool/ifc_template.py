@@ -236,37 +236,43 @@ def _make_opening_element(f, owner, body_ctx, cls, name,
     return f.create_entity(cls, **kwargs)
 
 
-def build_house_ifc(spec: dict, out_path: str | Path) -> Path:
-    """Spec'i tüketip valid IFC4 dosyası yazar; out_path döner."""
-    f = ifcopenshell.file(schema="IFC4")
-    project, owner, body_ctx = _setup_project(f, spec.get("name", "House"))
+def _make_storey_at(f, owner, name, bld_pl, elevation: float):
+    """IfcBuildingStorey'i verilen z elevasyonunda kur (multi-storey için)."""
+    placement = _local_placement(
+        f, _pt(f, 0, 0, float(elevation)), rel_to=bld_pl,
+    )
+    storey = f.create_entity(
+        "IfcBuildingStorey",
+        GlobalId=ifc_guid.new(), OwnerHistory=owner, Name=name,
+        ObjectPlacement=placement, CompositionType="ELEMENT",
+        Elevation=float(elevation),
+    )
+    return storey, placement
 
-    site, site_pl = _make_spatial(f, owner, "IfcSite", "Site")
-    building, bld_pl = _make_spatial(f, owner, "IfcBuilding", "Building", site_pl)
-    storey, st_pl = _make_spatial(f, owner, "IfcBuildingStorey", "Storey 1", bld_pl)
-    _aggregate(f, owner, project, [site])
-    _aggregate(f, owner, site, [building])
-    _aggregate(f, owner, building, [storey])
 
-    rooms = spec.get("rooms") or []
-    h = float(spec.get("storey_height", 3.0))
-    t = float(spec.get("wall_thickness", 0.20))
+def _build_storey_content(f, owner, body_ctx, st_pl, storey_name,
+                          rooms_data, openings_data, h, t):
+    """Tek bir kat içindeki slab + walls + spaces + doors/windows.
 
+    Returns: (physical_elements, extras_elements, spaces, walls_by_room)
+    """
     physical: list = []
     spaces: list = []
     walls_by_room: dict[str, list] = {}
 
-    if rooms:
-        xs = [r["origin"][0] for r in rooms] + [r["origin"][0] + r["size"][0] for r in rooms]
-        ys = [r["origin"][1] for r in rooms] + [r["origin"][1] + r["size"][1] for r in rooms]
+    if rooms_data:
+        xs = [r["origin"][0] for r in rooms_data] + \
+             [r["origin"][0] + r["size"][0] for r in rooms_data]
+        ys = [r["origin"][1] for r in rooms_data] + \
+             [r["origin"][1] + r["size"][1] for r in rooms_data]
         slab = _slab(
-            f, owner, body_ctx, "Floor",
+            f, owner, body_ctx, f"Floor-{storey_name}",
             (min(xs) - 0.3, min(ys) - 0.3, max(xs) + 0.3, max(ys) + 0.3),
             0.20, st_pl,
         )
         physical.append(slab)
 
-    for room in rooms:
+    for room in rooms_data:
         rname = room["name"]
         space, _ = _make_spatial(f, owner, "IfcSpace", rname, st_pl)
         spaces.append(space)
@@ -281,18 +287,15 @@ def build_house_ifc(spec: dict, out_path: str | Path) -> Path:
         ]
         for side, p1, p2 in edges:
             wall = _wall_between(f, owner, body_ctx, f"{rname}-{side}",
-                                  p1, p2, h, t, st_pl)
+                                 p1, p2, h, t, st_pl)
             if wall is None:
                 continue
             walls_by_room[rname].append((side, wall, p1, p2))
             physical.append(wall)
             _bound(f, owner, space, wall)
 
-    _aggregate(f, owner, storey, spaces)
-
-    # Doors / Windows
-    extras = []
-    for op in (spec.get("openings") or []):
+    extras: list = []
+    for op in (openings_data or []):
         rname = op.get("room")
         side = op.get("side")
         if rname not in walls_by_room:
@@ -323,7 +326,64 @@ def build_house_ifc(spec: dict, out_path: str | Path) -> Path:
         )
         extras.append(elem)
 
-    _contain(f, owner, storey, physical + extras)
+    return physical, extras, spaces
+
+
+def build_house_ifc(spec: dict, out_path: str | Path) -> Path:
+    """Spec'i tüketip valid IFC4 dosyası yazar; out_path döner.
+
+    İki spec şeması desteklenir:
+
+      Eski (tek kat — geriye dönük uyumlu):
+        {"rooms": [...], "openings": [...], "storey_height": 3.0, ...}
+
+      Yeni (çok katlı):
+        {
+          "storeys": [
+            {"name": "Zemin",  "elevation": 0.0, "rooms": [...], "openings": [...]},
+            {"name": "1. Kat", "elevation": 3.0, "rooms": [...], "openings": [...]},
+          ],
+          "storey_height": 3.0, ...
+        }
+    """
+    f = ifcopenshell.file(schema="IFC4")
+    project, owner, body_ctx = _setup_project(f, spec.get("name", "House"))
+
+    site, site_pl = _make_spatial(f, owner, "IfcSite", "Site")
+    building, bld_pl = _make_spatial(f, owner, "IfcBuilding", "Building", site_pl)
+    _aggregate(f, owner, project, [site])
+    _aggregate(f, owner, site, [building])
+
+    h = float(spec.get("storey_height", 3.0))
+    t = float(spec.get("wall_thickness", 0.20))
+
+    # Geriye uyumluluk: top-level rooms/openings → tek kat olarak sar
+    storeys_data = spec.get("storeys")
+    if not storeys_data:
+        storeys_data = [{
+            "name": "Storey 1",
+            "elevation": 0.0,
+            "rooms": spec.get("rooms", []),
+            "openings": spec.get("openings", []),
+        }]
+
+    storey_objs = []
+    for s_idx, sdata in enumerate(storeys_data):
+        elev = float(sdata.get("elevation", s_idx * h))
+        sname = str(sdata.get("name", f"Storey {s_idx + 1}"))
+        storey, st_pl = _make_storey_at(f, owner, sname, bld_pl, elev)
+        storey_objs.append(storey)
+        physical, extras, spaces = _build_storey_content(
+            f, owner, body_ctx, st_pl, sname,
+            sdata.get("rooms") or [],
+            sdata.get("openings") or [],
+            h, t,
+        )
+        if spaces:
+            _aggregate(f, owner, storey, spaces)
+        _contain(f, owner, storey, physical + extras)
+
+    _aggregate(f, owner, building, storey_objs)
 
     out_p = Path(out_path)
     out_p.parent.mkdir(parents=True, exist_ok=True)

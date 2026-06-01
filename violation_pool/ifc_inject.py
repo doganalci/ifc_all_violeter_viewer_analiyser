@@ -75,8 +75,39 @@ UYGULANAMAZSA:
 Sadece JSON döndür, başka hiçbir metin yazma."""
 
 
+COMPLIANT_ADDITION_PROMPT = """Sen bir BIM editörsün. Görevin: bu binaya
+fiziksel bir kolon (IfcColumn) ekle AMA hiçbir erişilebilirlik kuralını
+bozma. Amaç: modele 'kolon = ihlal' yanılgısını öğretmemek için
+'kural bozmayan kolon' örneği üretmek (negatif eğitim örneği).
+
+KISITLAR:
+- Kolon kapıdan / rampa / merdiven girişinden EN AZ 1.50 m uzakta olmalı
+  (manevra alanı kuralı: 1.50 m × 1.50 m).
+- Koridor merkez aksından uzak, mümkünse duvara yapışık (offset 0.10-0.25 m).
+- Tipik boyut: küçük ve duvar yanı: [0.20, 0.20, 2.50] veya benzeri.
+- Asansör/WC/giriş kapılarının yakın çevresinde KONUMLANDIRMA.
+
+ÇIKTI:
+{
+  "applicable": true,
+  "action": "add_obstruction",
+  "reference_guid": "GUID",                  // duvar veya space referansı
+  "ifc_type": "IfcWall|IfcSpace",
+  "obstruction_size": [0.20, 0.20, 2.50],
+  "offset": 0.15,                            // duvardan/referanstan uzaklık (m)
+  "rationale": "Duvara 15 cm uzaklıkta küçük kolon; kapıdan 2.10 m → kural ok."
+}
+
+UYGUN HEDEF YOKSA:
+{"applicable": false, "reason": "kısa neden"}
+
+Sadece JSON döndür."""
+
+
 def _client() -> OpenAI:
-    return OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
+    # Local LLM override aktifse oraya gider; aksi halde OpenAI.
+    from ._chat import chat_client
+    return chat_client()
 
 
 _INTERESTING = ("IfcDoor", "IfcWindow", "IfcWall", "IfcWallStandardCase",
@@ -121,6 +152,20 @@ def _parse_json(text: str) -> dict:
     return json.loads(m.group(0))
 
 
+def _chat_with_retry(model: str, messages: list, *, max_retries: int = 6,
+                     **kwargs):
+    """OpenAI chat çağrısı için sarmalayıcı.
+
+    - 429 / 5xx → exponential backoff (Retry-After header'ına saygı).
+    - 'unsupported parameter' (gpt-5 / o-serisi) → ilgili kwarg'ı düşür
+      ve tekrar dene.
+    Ortak mantık `violation_pool._chat.safe_chat`'te.
+    """
+    from ._chat import safe_chat
+    return safe_chat(_client(), model=model, messages=messages,
+                     max_retries=max_retries, **kwargs)
+
+
 def _propose_edit(violation: dict, cat: list[dict], model: str,
                   usage_meta: dict | None = None) -> dict:
     user = (
@@ -131,9 +176,9 @@ def _propose_edit(violation: dict, cat: list[dict], model: str,
                      ensure_ascii=False, indent=2)
         + "\n\nKatalog:\n" + _short_catalog(cat)
     )
-    resp = _client().chat.completions.create(
-        model=model,
-        messages=[
+    resp = _chat_with_retry(
+        model,
+        [
             {"role": "system", "content": INJECT_SYSTEM_PROMPT},
             {"role": "user", "content": user},
         ],
@@ -144,6 +189,35 @@ def _propose_edit(violation: dict, cat: list[dict], model: str,
         getattr(resp, "usage", None),
         operation="ifc_inject", model=model,
         note=(violation.get("title") or violation.get("id") or "")[:80],
+        **(usage_meta or {}),
+    )
+    return _parse_json(resp.choices[0].message.content or "")
+
+
+def _propose_compliant_addition(cat: list[dict], model: str,
+                                usage_meta: dict | None = None) -> dict:
+    """LLM'den 'kural bozmayan bir kolon' önerisi al.
+
+    Mevcut _apply_add_obstruction ile uyumlu JSON döndürür; tek fark
+    konumlandırma niyeti — modelin 'kolon = ihlal' kestirmesini bozmak.
+    """
+    user = (
+        "Aşağıdaki binaya kuralı bozmayacak şekilde küçük bir kolon ekle "
+        "(negatif eğitim örneği).\n\nKatalog:\n" + _short_catalog(cat)
+    )
+    resp = _chat_with_retry(
+        model,
+        [
+            {"role": "system", "content": COMPLIANT_ADDITION_PROMPT},
+            {"role": "user", "content": user},
+        ],
+        temperature=0.4,
+        response_format={"type": "json_object"},
+    )
+    storage.record_usage_from_openai(
+        getattr(resp, "usage", None),
+        operation="ifc_compliant_add", model=model,
+        note="compliant_addition",
         **(usage_meta or {}),
     )
     return _parse_json(resp.choices[0].message.content or "")
@@ -335,6 +409,8 @@ def inject_violations(
     decoy_seed: int | None = None,
     fill_from_pool: bool = True,
     max_replacement_attempts: int | None = None,
+    compliant_addition_ratio: float = 0.0,
+    generation_params: dict | None = None,
 ) -> dict:
     """violations: havuzdan seçilmiş ihlal dict'leri.
     decoy_ratio: GERÇEKTEN uygulanan ihlal sayısının yüzdesi kadar SAHTE
@@ -358,9 +434,22 @@ def inject_violations(
     out_id = str(uuid.uuid4())
     out_dir = settings.ifc_dir / "violated"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_ifc = out_dir / f"{out_id}.ifc"
-    out_lab = out_dir / f"{out_id}.labels.json"
-    out_meta = out_dir / f"{out_id}.meta.json"
+    # Dosya adı: yöntem (llminj) + baseline + sıra → nasıl üretildiği belli.
+    # Örn: llminj_synth_two_room_00018_violated1, _violated2, ...
+    _base_stem = Path(base.get("file_path", "")).stem or (base.get("name") or "baseline")
+    _base_stem = "".join(c if c.isalnum() or c in "-_+" else "_" for c in _base_stem)
+    _name_base = f"llminj_{_base_stem}"   # codex1 LLM enjeksiyon yöntemi
+    # Bu baseline için ilk boş _violatedN'i bul (paralelde nadir çakışmada
+    # uuid suffix'iyle güvenceye alınır).
+    _n = 1
+    while (out_dir / f"{_name_base}_violated{_n}.ifc").exists():
+        _n += 1
+    _stem = f"{_name_base}_violated{_n}"
+    if (out_dir / f"{_stem}.ifc").exists():   # paralel çakışma güvencesi
+        _stem = f"{_name_base}_violated{_n}_{out_id[:6]}"
+    out_ifc = out_dir / f"{_stem}.ifc"
+    out_lab = out_dir / f"{_stem}.labels.json"
+    out_meta = out_dir / f"{_stem}.meta.json"
     inject_meta_ifc_id = out_id
 
     target = len(violations)
@@ -501,6 +590,72 @@ def inject_violations(
             })
             decoys_added += 1
 
+    # ----- Uyumlu eklemeler (compliant additions) -----
+    # Gerçekten IFC'ye kolon ekler AMA kuralı bozmaz; negatif eğitim
+    # örneği. Modelin 'kolon görünce ihlal de' kestirmesini engeller.
+    compliant_added = 0
+    compliant_addition_ratio = max(0.0, float(compliant_addition_ratio or 0.0))
+    n_compliant_target = int(round(applied * compliant_addition_ratio))
+    compliant_attempts = 0
+    inject_meta_c = dict(inject_meta)
+    inject_meta_c["phase"] = "compliant_addition"
+    while compliant_added < n_compliant_target and compliant_attempts < n_compliant_target * 3 + 3:
+        compliant_attempts += 1
+        try:
+            sug = _propose_compliant_addition(cat, model,
+                                              usage_meta=inject_meta_c)
+        except Exception as e:
+            labels.append({
+                "violation_id": None,
+                "title": "[COMPLIANT] LLM hata",
+                "category": "Uyumlu ekleme",
+                "severity": None, "threshold": None, "evidence": [],
+                "ifc_global_id": None, "ifc_type": None, "ifc_name": None,
+                "attribute": None, "value_before": None, "value_after": None,
+                "status": "skipped", "is_decoy": False,
+                "action": "compliant_addition",
+                "is_replacement": False,
+                "reason": f"LLM hata: {e}",
+                "applied_at": datetime.utcnow().isoformat(timespec="seconds"),
+            })
+            continue
+        if not sug.get("applicable"):
+            continue
+        try:
+            info = _apply_add_obstruction(src, sug)
+        except Exception as e:
+            labels.append({
+                "violation_id": None,
+                "title": "[COMPLIANT] uygulama hatası",
+                "category": "Uyumlu ekleme",
+                "severity": None, "threshold": None, "evidence": [],
+                "ifc_global_id": None, "ifc_type": "IfcColumn",
+                "ifc_name": None,
+                "attribute": "[ADDED]", "value_before": None,
+                "value_after": None,
+                "status": "skipped", "is_decoy": False,
+                "action": "compliant_addition",
+                "is_replacement": False,
+                "reason": f"uygulama hatası: {e}",
+                "applied_at": datetime.utcnow().isoformat(timespec="seconds"),
+            })
+            continue
+        labels.append({
+            "violation_id": None,
+            "title": "[COMPLIANT] Kural bozmayan kolon",
+            "category": "Uyumlu ekleme",
+            "severity": None, "threshold": None, "evidence": [],
+            **info,
+            "status": "compliant",
+            "is_decoy": False,
+            "action": "compliant_addition",
+            "is_replacement": False,
+            "reason": sug.get("rationale") or
+                      "Kuralı bozmayan negatif eğitim örneği.",
+            "applied_at": datetime.utcnow().isoformat(timespec="seconds"),
+        })
+        compliant_added += 1
+
     src.write(str(out_ifc))
 
     summary = {
@@ -510,15 +665,33 @@ def inject_violations(
         "replaced_from_pool": replaced,
         "decoys": decoys_added,
         "decoy_ratio": decoy_ratio,
+        "compliant_additions": compliant_added,
+        "compliant_addition_ratio": compliant_addition_ratio,
     }
+    # Tanılama: applied=0 ise neden? İlk birkaç skip sebebini topla.
+    if applied == 0 and skipped > 0:
+        reasons = [l.get("reason", "?") for l in labels
+                   if l.get("status") == "skipped"][:3]
+        summary["skip_sample_reasons"] = reasons
+    # Bu baseline için kaçıncı re-injection (_violatedN'deki N).
+    # Aynı baseline'a tekrar enjekte ettiğimizde isimden + meta'dan
+    # hangi sefer olduğu anlaşılır.
+    try:
+        attempt_no = int(_stem.rsplit("_violated", 1)[1].split("_", 1)[0])
+    except Exception:
+        attempt_no = 1
+
     labels_doc = {
         "ifc_file": out_ifc.name,
         "baseline_id": baseline_id,
+        "baseline_name": base.get("name"),
         "violated_id": out_id,
+        "attempt_no": attempt_no,
         "pool_run_id": pool_run_id,
         "llm_model": model,
         "selection_filter": selection_filter or {},
         "fill_from_pool": fill_from_pool,
+        "generation_params": generation_params or {},
         "created_at": datetime.utcnow().isoformat(timespec="seconds"),
         "summary": summary,
         "labels": labels,
@@ -527,7 +700,10 @@ def inject_violations(
                        encoding="utf-8")
     out_meta.write_text(json.dumps({
         "ifc_id": out_id, "kind": "violated", "baseline_id": baseline_id,
+        "baseline_name": base.get("name"),
+        "attempt_no": attempt_no,
         "pool_run_id": pool_run_id, "llm_model": model,
+        "generation_params": generation_params or {},
         "summary": summary,
         "created_at": labels_doc["created_at"],
     }, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -537,19 +713,32 @@ def inject_violations(
     graph_path: str | None = None
     try:
         from . import ifc_graph
-        gp = out_dir / f"{out_id}.graph.json"
+        gp = out_dir / f"{_stem}.graph.json"
         ifc_graph.build_and_save(out_ifc, gp)
         graph_path = str(gp)
-    except Exception:
+    except Exception as _ge:
         graph_path = None
+        summary["graph_error"] = str(_ge)
 
+    # dataset_tag'ı parent baseline'dan miras al (varsa) — eğitim/listeleme
+    # sayfalarında violated IFC'ler parent paketle birlikte görünür.
+    _parent_tag = base.get("dataset_tag") if isinstance(base, dict) else None
+    # İsmin sonuna attempt no koy: aynı baseline'a birden fazla enjekte
+    # edildiğinde DB listesinde de hangi sefer olduğu okunur.
+    _display_name = f"{base['name']}.violated#{attempt_no}"
     mid = storage.create_ifc_model(
         id=out_id,
-        kind="violated", name=base["name"] + ".violated", parent_id=baseline_id,
+        kind="violated", name=_display_name, parent_id=baseline_id,
         llm_model=model, prompt=None, pool_run_id=pool_run_id,
-        params={"summary": summary, "selection_filter": selection_filter or {}},
+        params={
+            "summary": summary,
+            "selection_filter": selection_filter or {},
+            "generation_params": generation_params or {},
+            "attempt_no": attempt_no,
+        },
         file_path=str(out_ifc), meta_path=str(out_meta), labels_path=str(out_lab),
         graph_path=graph_path, status=status, error=None,
+        dataset_tag=_parent_tag,
     )
     storage.add_ifc_labels(mid, labels)
     return {

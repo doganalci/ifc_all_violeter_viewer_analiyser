@@ -16,14 +16,13 @@ import torch
 from torch_geometric.loader import DataLoader
 
 _ML = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_ML))
 sys.path.insert(0, str(_ML.parent))
 
 from paths import data_home
-from data import IFCViolationDataset, split_by_baseline
-from model import GATNodeClassifier, HeteroGATNodeClassifier
-from train.config import TrainConfig
-from train.metrics import evaluate_predictions
+from ml.data import IFCViolationDataset, split_by_baseline
+from ml.model import GATNodeClassifier, HeteroGATNodeClassifier
+from ml.train.config import TrainConfig
+from ml.train.metrics import evaluate_predictions
 
 
 def _build_model(cfg: TrainConfig, in_dim: int, num_edge_types: int):
@@ -58,6 +57,10 @@ def main() -> None:
         root=cfg.cache_root,
         dataset_root=cfg.dataset_root,
         include_baselines=cfg.include_baselines,
+        use_rule_oracle=getattr(cfg, "use_rule_oracle", False),
+        mask_numeric_features=getattr(cfg, "mask_numeric_features", False),
+        mask_pset_features=getattr(cfg, "mask_pset_features", False),
+        mask_type_features=getattr(cfg, "mask_type_features", False),
     )
     baseline_ids = [ds[i].baseline_id for i in range(len(ds))]
     splits = split_by_baseline(
@@ -74,7 +77,7 @@ def main() -> None:
     model.load_state_dict(torch.load(a.checkpoint, map_location=device))
     model.eval()
 
-    y_all, p_all, d_all = [], [], []
+    y_all, p_all, s_all, d_all = [], [], [], []
     c_all: list = []
     with torch.no_grad():
         for batch in loader:
@@ -83,6 +86,7 @@ def main() -> None:
             probs = torch.sigmoid(logits).cpu().numpy()
             y_all.append(batch.y.cpu().numpy())
             p_all.append((probs >= threshold).astype(np.int64))
+            s_all.append(probs)
             d_all.append(batch.decoy_mask.cpu().numpy())
             for cats in batch.categories:
                 c_all.extend(cats)
@@ -92,8 +96,12 @@ def main() -> None:
         np.concatenate(p_all),
         np.concatenate(d_all),
         categories=c_all,
+        y_score=np.concatenate(s_all),
     )
     print(json.dumps(res.to_dict(), indent=2))
+    print()
+    print("Confusion matrix:")
+    print(res.confusion_matrix_pretty())
 
 
 if __name__ == "__main__":

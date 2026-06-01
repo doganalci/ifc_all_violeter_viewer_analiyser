@@ -22,15 +22,14 @@ import streamlit as st
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
-sys.path.insert(0, str(_ROOT / "ml"))
 
-from analysis import (
+from ml.analysis import (
     accessible_path, list_rooms, shortest_path, widest_path,
 )
-from analysis.pathfind import ACCESSIBLE_WIDTH_M, nearest_exit
-from app.state import labels_summary, load_sample_for, sidebar_config
-from viz.graph_view import static_plotly
-from viz.ifc3d import build_figure, extract_meshes
+from ml.analysis.pathfind import ACCESSIBLE_WIDTH_M, nearest_exit
+from ml.app.state import labels_summary, load_sample_for, sidebar_config
+from ml.viz.graph_view import static_plotly
+from ml.viz.ifc3d import build_figure, extract_meshes
 
 
 @st.cache_data(show_spinner="IFC tessellate ediliyor...")
