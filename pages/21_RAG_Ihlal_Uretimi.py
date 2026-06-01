@@ -211,73 +211,99 @@ expected_violations = int(n_per_ifc) * expected_violated_ifcs
 # --- 5. Model -------------------------------------------------------------
 st.subheader("5. LLM modeli")
 
-# 5a. Local LLM toggle (Ollama / vLLM / LM Studio / herhangi OpenAI-uyumlu)
-with st.expander("🏠 Local LLM kullan (Ollama / vLLM / LM Studio)"):
-    st.caption(
-        "OpenAI yerine yerel/uzak bir OpenAI-uyumlu sunucuya yönlendir. "
-        "**Sadece chat çağrıları** (RAG havuz + inject + uyumlu kolon) "
-        "lokale gider; **embedding** (RAG retrieve) hala OpenAI'da kalır."
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _ollama_models(endpoint: str) -> list[str]:
+    """Ollama API'den yüklü modelleri çek. Sunucu kapalıysa [] döner."""
+    try:
+        import urllib.request
+        import json as _json
+        req = urllib.request.Request(f"{endpoint.rstrip('/v1')}/api/tags")
+        with urllib.request.urlopen(req, timeout=2) as r:
+            data = _json.loads(r.read())
+        return sorted(m.get("name", "") for m in data.get("models", []))
+    except Exception:
+        return []
+
+
+_DEFAULT_LOCAL_ENDPOINT = "http://localhost:11434/v1"
+
+with st.expander("⚙️ Gelişmiş — local endpoint override"):
+    custom_endpoint = st.text_input(
+        "Local LLM endpoint URL",
+        value=_DEFAULT_LOCAL_ENDPOINT,
+        help="Ollama default: http://localhost:11434/v1  ·  "
+             "vLLM: http://localhost:8000/v1  ·  "
+             "LM Studio: http://localhost:1234/v1. "
+             "Aşağıdaki dropdown'da 🏠 modellerini buradan listeler.",
     )
-    use_local = st.checkbox("🏠 Local LLM aktif", value=False,
-                            key="rag_use_local")
-    lc1, lc2 = st.columns([2, 2])
-    with lc1:
-        llm_base_url = st.text_input(
-            "Endpoint URL",
-            value="http://localhost:11434/v1",
-            disabled=not use_local,
-            help="Ollama: http://localhost:11434/v1  ·  "
-                 "vLLM: http://localhost:8000/v1  ·  "
-                 "LM Studio: http://localhost:1234/v1",
-        )
-    with lc2:
-        local_model = st.text_input(
-            "Model adı (yerel)",
-            value="qwen2.5:14b-instruct",
-            disabled=not use_local,
-            help="Ollama: 'ollama list' çıktısındaki ad. JSON çıktı + "
-                 "araç-kullanım iyi olan modeller önerilir: qwen2.5:14b, "
-                 "llama3.1:8b, mistral-small.",
-        )
-    llm_api_key = "local"
-    if use_local:
-        st.success(
-            f"🏠 Aktif: `{llm_base_url}` · model `{local_model}` · "
-            "maliyet $0"
-        )
+
+_ollama_list = _ollama_models(custom_endpoint)
+_openai_models = known_models()
+
+# Birleşik dropdown — ☁️ OpenAI · 🏠 Local · ✏️ Custom
+_unified_opts: list[str] = []
+_unified_opts += [f"☁️ {m}" for m in _openai_models]
+_unified_opts += [f"🏠 {m}" for m in _ollama_list]
+_unified_opts += ["✏️ Özel (elle yaz)"]
+
+# Default seçim: önce ucuz local varsa onu öner, yoksa gpt-4o, yoksa ilki.
+_pref = next((o for o in _unified_opts if "qwen2.5" in o.lower()), None)
+if not _pref:
+    _pref = next((o for o in _unified_opts if o == "☁️ gpt-4o"), None)
+_default_idx = _unified_opts.index(_pref) if _pref else 0
 
 mc = st.columns([2, 1, 1])
 with mc[0]:
-    if use_local:
-        st.info(f"Local model: **`{local_model}`** (yukarıdan değiştir)")
-        model = local_model
+    _pick = st.selectbox(
+        "🤖 Model",
+        options=_unified_opts, index=_default_idx,
+        help=("☁️ = OpenAI (maliyetli)  ·  "
+              "🏠 = Ollama / local (ücretsiz, daha yavaş)  ·  "
+              "✏️ = elle yaz (özel deployment)"),
+    )
+    if _pick.startswith("☁️ "):
+        model = _pick[2:].strip()
+        use_local = False
+        llm_base_url = None
+    elif _pick.startswith("🏠 "):
+        model = _pick[2:].strip()
+        use_local = True
+        llm_base_url = custom_endpoint.strip() or _DEFAULT_LOCAL_ENDPOINT
     else:
-        _opts = known_models() + ["✏️ Özel (elle yaz)"]
-        _default_idx = _opts.index("gpt-4o") if "gpt-4o" in _opts else 0
-        _pick = st.selectbox(
-            "🤖 Model", options=_opts, index=_default_idx,
-            help="Hem RAG havuz üretimi hem IFC enjeksiyonu (her ihlal için "
-                 "_propose_edit) bu modeli kullanır.",
+        # Özel — kullanıcı modeli ve (opsiyonel) endpoint'i kendi belirler
+        model = st.text_input("Model adı", value="gpt-4o",
+                              key="rag_custom_model")
+        _custom_local = st.checkbox(
+            "Bu model local endpoint'e gitsin",
+            value=False, key="rag_custom_is_local",
+            help="Açarsan yukarıdaki Gelişmiş endpoint kullanılır.",
         )
-        if _pick == "✏️ Özel (elle yaz)":
-            model = st.text_input("Model", value="gpt-4o", key="rag_custom_model")
-        else:
-            model = _pick
+        use_local = bool(_custom_local)
+        llm_base_url = (custom_endpoint.strip()
+                        if use_local else None)
+    llm_api_key = "local" if use_local else None
+    if not _ollama_list and _pick == _unified_opts[0]:
+        st.caption(
+            "💡 Local model görünmüyor mu? Ollama'yı kur ve model çek: "
+            "`.\\scripts\\install_local_llm.ps1` (Windows) ya da "
+            "`./scripts/install_local_llm.sh` (mac/linux)."
+        )
 with mc[1]:
-    # Tahmini maliyet: 1 RAG çağrı + N inject çağrı + M compliant çağrı
+    # Tahmini maliyet
     expected_compliant = int(round(expected_violations * compliant_ratio))
     n_inject_calls = expected_violations + expected_compliant
     if use_local:
         total_est = 0.0
-        rag_call_cost = 0.0
-        inject_call_cost = 0.0
+        st.metric("🧮 Tahmini maliyet", "$0.0000",
+                  help="Local LLM — ücretsiz")
     else:
         rag_call_cost = estimate_cost(model, 3000, 5000)["total_usd"]
         inject_call_cost = estimate_cost(model, 2000, 500)["total_usd"]
         total_est = rag_call_cost + n_inject_calls * inject_call_cost
-    st.metric("🧮 Tahmini maliyet", f"${total_est:.4f}",
-              help=f"1 RAG havuz + {n_inject_calls} inject çağrı "
-                   f"({expected_violations} ihlal + {expected_compliant} uyumlu)")
+        st.metric("🧮 Tahmini maliyet", f"${total_est:.4f}",
+                  help=f"1 RAG havuz + {n_inject_calls} inject çağrı "
+                       f"({expected_violations} ihlal + {expected_compliant} uyumlu)")
 with mc[2]:
     st.metric("⏱️ Tahmini süre",
               f"~{5 + n_inject_calls * 2}s",
