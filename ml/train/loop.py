@@ -275,7 +275,10 @@ def run_training(
             torch.save(model.state_dict(), run_dir / "best.pt")
         else:
             no_improve += 1
-            if no_improve >= cfg.patience:
+            # patience > 0 ise erken durdurma aktif. 0 ya da negatif
+            # değer 'erken durdurma kapalı' anlamına gelir; tüm epoch'lar
+            # çalışır (en uzun süre öğrensin diye).
+            if cfg.patience > 0 and no_improve >= cfg.patience:
                 _log(f"[train] early stopping at epoch {epoch} (no val F1 improvement)")
                 stopped_early = True
                 break

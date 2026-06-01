@@ -209,6 +209,15 @@ with st.expander("⚙️ Detaylı ayarlar (default'lar eskisi gibi)",
                  "yavaş yavaş iyileşmesine vakit tanı. Çok hızlı "
                  "duruyorsa 50-80'e çıkar.",
         )
+        early_stop_enabled = st.checkbox(
+            "Early stopping aktif",
+            value=True,
+            help="Kapatırsan tüm epoch'lar çalışır (val_F1 platosu olsa "
+                 "bile durmaz). Modeli sonuna kadar zorlamak istediğinde "
+                 "veya kullanılan veri çok dengesizse kapat.",
+        )
+        if not early_stop_enabled:
+            patience = 0  # loop.py'da 0 = kapalı
     with hc3:
         threshold = st.slider("classification threshold", 0.1, 0.9,
                                0.5, 0.05)
